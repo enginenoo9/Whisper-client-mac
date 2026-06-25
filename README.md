@@ -63,8 +63,12 @@ then confirm with `brew --version`. Then open the app — it handles the rest.
    Select multiple at once with Shift- or Command-click. Remove individual
    files with **Remove** or the Delete key. **Clear All** empties the queue.
 4. **Save to** — defaults to your Desktop.
-5. **Format** — `TXT` for a plain transcript. `SRT`/`VTT` are subtitle formats.
-   `ALL` writes all three.
+5. **Format** — choose your output:
+   - `TXT` — plain text transcript
+   - `SRT` / `VTT` — subtitle formats (with timestamps)
+   - `PDF` — formatted PDF document
+   - `DOCX` — Word-compatible document
+   - `ALL` — writes TXT, SRT, and VTT together
 6. **Cleanup** — merges choppy per-segment line breaks into readable paragraphs.
 7. Click **Transcribe 1 File** / **Transcribe N Files**.
 
@@ -72,6 +76,20 @@ Files are processed one at a time in order. The current file is highlighted in
 the queue. When the last one finishes, the output folder opens automatically.
 
 Your last choices (model, format, save folder) are remembered next time.
+
+---
+
+## Live Transcription
+
+Click **Live Transcribe…** to transcribe from your microphone in real time.
+
+1. Select an output format (TXT, PDF, or DOCX).
+2. Click **Start** — the app begins recording and transcribes in ~10-second chunks.
+3. Text appears as each chunk is processed (expect ~12–15 second latency).
+4. Click **Stop** to finish. The transcript is saved to your **Save to** folder
+   with a timestamped filename.
+
+macOS will prompt for microphone permission on first use.
 
 ---
 
@@ -104,7 +122,7 @@ brew install python-tk ffmpeg   # if not already installed
 ```
 
 `build.sh` will:
-1. Install `py2app` and `mlx-whisper` into your Homebrew Python.
+1. Install `py2app`, `mlx-whisper`, `fpdf2`, `python-docx`, and `sounddevice` into your Homebrew Python.
 2. Bundle the app, Python runtime, all ML dependencies, and ffmpeg into a
    single `dist/Whisper Transcriber.app` (~500 MB).
 3. Create `dist/Whisper-Transcriber-2.0.dmg` — drag-to-install, no setup needed.
@@ -166,3 +184,6 @@ Make sure `brew install python-tk` succeeded and that Python reports a version
   directly (no subprocess needed).
 - MLX runs Whisper models accelerated by Apple's GPU via the Metal framework.
 - `ffmpeg` decodes audio. Whisper transcribes it. Everything stays on your Mac.
+- **PDF output** uses `fpdf2`. **DOCX output** uses `python-docx`.
+- **Live transcription** uses `sounddevice` to capture 10-second audio chunks
+  from the microphone, then passes each chunk directly to `mlx_whisper.transcribe()`.

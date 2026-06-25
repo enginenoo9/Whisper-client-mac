@@ -29,5 +29,7 @@
     <!-- Don't show in the Dock as a persistent background agent; normal app -->
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Whisper Transcriber needs microphone access for live transcription.</string>
 </dict>
 </plist>

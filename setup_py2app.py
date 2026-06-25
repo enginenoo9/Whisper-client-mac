@@ -27,6 +27,7 @@ OPTIONS = {
         "NSRequiresAquaSystemAppearance": True,
         "LSMinimumSystemVersion":   "12.0",
         "LSApplicationCategoryType": "public.app-category.productivity",
+        "NSMicrophoneUsageDescription": "Whisper Transcriber needs microphone access for live transcription.",
     },
     # All packages that need to be recursively bundled.
     # py2app walks their compiled extensions and dylibs automatically.
@@ -47,6 +48,9 @@ OPTIONS = {
         "fsspec",
         "regex",
         "tkinter",
+        "fpdf",
+        "docx",
+        "sounddevice",
     ],
     "includes": [
         "tkinter.ttk",

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Whisper Transcriber — macOS GUI for mlx-whisper.
-Batch transcription: queue multiple files and process them sequentially.
+Batch transcription of files + chunk-based live microphone transcription.
+Output formats: TXT, SRT, VTT, PDF, DOCX, or all at once.
 """
 
 import contextlib
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 # py2app sets sys.frozen; use Python API for all ML calls when bundled.
@@ -33,11 +35,301 @@ MODELS = [
     ("Small     — Fast           (~460 MB)", "mlx-community/whisper-small-mlx"),
     ("Base      — Fastest        (~145 MB)", "mlx-community/whisper-base-mlx"),
 ]
-OUTPUT_FORMATS = ["txt", "srt", "vtt", "all"]
+# SRT/VTT carry timestamps, so they don't apply to live mode.
+OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx", "all"]
+LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
 CONFIG_PATH = os.path.expanduser("~/Whisper/whisper_transcriber_config.json")
 DEFAULT_MODEL_INDEX = 1
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Live Transcription Window
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LiveTranscribeWindow:
+    """
+    Popup window that records from the default microphone in 10-second chunks,
+    transcribes each chunk with mlx-whisper, and accumulates the transcript.
+    """
+
+    CHUNK_SECS  = 10     # seconds of audio per transcription pass
+    SAMPLE_RATE = 16000  # Hz — Whisper's native rate
+
+    def __init__(self, parent: tk.Widget, app: "WhisperApp"):
+        self.app = app
+
+        self.win = tk.Toplevel(parent)
+        self.win.title("Live Transcription")
+        self.win.configure(bg=BG)
+        self.win.geometry("600x500")
+        self.win.resizable(True, True)
+        self.win.minsize(480, 380)
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._recording   = False
+        self._stop_event  = threading.Event()
+        self._transcript  = ""
+        self._elapsed     = 0
+        self._timer_id    = None
+        self.out_format   = tk.StringVar(value="txt")
+
+        self._build()
+        self._setup_theme()
+
+    # ── Theme (inherits from parent but applied locally) ──────────────────────
+
+    def _setup_theme(self):
+        style = ttk.Style(self.win)
+        style.configure("Live.Go.TButton", font=("Helvetica", 13, "bold"), padding=6)
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build(self):
+        frm = ttk.Frame(self.win, padding=(24, 16))
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Live Transcription",
+                  style="Title.TLabel").pack(anchor="w", pady=(0, 2))
+
+        # Model + output format bar
+        info = ttk.Frame(frm)
+        info.pack(fill="x", pady=(0, 8))
+
+        model_name = self.app._current_model()[0].split("—")[0].strip()
+        ttk.Label(info, text=f"Model: {model_name}",
+                  style="Muted.TLabel").pack(side="left")
+
+        fmt_frm = ttk.Frame(info)
+        fmt_frm.pack(side="right")
+        ttk.Label(fmt_frm, text="Save as:", style="Muted.TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        for fmt in LIVE_OUTPUT_FORMATS:
+            ttk.Radiobutton(fmt_frm, text=fmt.upper(),
+                            variable=self.out_format, value=fmt
+                            ).pack(side="left", padx=4)
+
+        # Status line
+        self._status_var = tk.StringVar(
+            value="Ready — click Start Recording to begin")
+        ttk.Label(frm, textvariable=self._status_var,
+                  style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
+
+        # Live transcript text area
+        txt_frm = ttk.Frame(frm)
+        txt_frm.pack(fill="both", expand=True, pady=(0, 10))
+
+        self._text = tk.Text(
+            txt_frm, font=("Helvetica", 12),
+            bg="white", fg=TEXT, relief="flat",
+            highlightthickness=1,
+            highlightcolor="#b0b0b0", highlightbackground="#d0d0d0",
+            wrap="word", padx=8, pady=8,
+        )
+        sb = ttk.Scrollbar(txt_frm, orient="vertical",
+                           command=self._text.yview)
+        self._text.configure(yscrollcommand=sb.set)
+        self._text.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        # Action buttons
+        btn_row = ttk.Frame(frm)
+        btn_row.pack(fill="x")
+
+        self._toggle_btn = ttk.Button(btn_row, text="Start Recording",
+                                      command=self._toggle,
+                                      style="Go.TButton")
+        self._toggle_btn.pack(side="left")
+
+        ttk.Button(btn_row, text="Copy",
+                   command=self._copy).pack(side="left", padx=(8, 0))
+        ttk.Button(btn_row, text="Clear",
+                   command=self._clear).pack(side="left", padx=(4, 0))
+
+        self._save_btn = ttk.Button(btn_row, text="Save…",
+                                    command=self._save, state="disabled")
+        self._save_btn.pack(side="right")
+
+    # ── Recording control ─────────────────────────────────────────────────────
+
+    def _toggle(self):
+        if self._recording:
+            self._stop()
+        else:
+            self._start()
+
+    def _start(self):
+        if not self._check_deps():
+            return
+
+        self._recording = True
+        self._stop_event.clear()
+        self._elapsed = 0
+        self._toggle_btn.config(text="Stop Recording")
+        self._save_btn.config(state="disabled")
+        self._set_status("● Recording 0:00  (first transcript arrives in ~10 s)")
+        self._timer_id = self.win.after(1000, self._tick)
+        threading.Thread(target=self._record_loop, daemon=True).start()
+
+    def _stop(self):
+        self._recording = False
+        self._stop_event.set()
+        if self._timer_id:
+            self.win.after_cancel(self._timer_id)
+        self._toggle_btn.config(text="Start Recording")
+        self._set_status("Finishing last chunk…")
+
+    def _tick(self):
+        if not self._recording:
+            return
+        self._elapsed += 1
+        m, s = divmod(self._elapsed, 60)
+        self._set_status(f"● Recording {m}:{s:02d}")
+        self._timer_id = self.win.after(1000, self._tick)
+
+    # ── Dependency check ──────────────────────────────────────────────────────
+
+    def _check_deps(self) -> bool:
+        missing = []
+        try:
+            import sounddevice  # noqa: F401
+        except ImportError:
+            missing.append("sounddevice")
+        try:
+            import mlx_whisper  # noqa: F401
+        except ImportError:
+            missing.append("mlx_whisper")
+
+        if missing:
+            pkg = " ".join(missing)
+            messagebox.showerror(
+                "Missing packages",
+                f"Live transcription needs: {pkg}\n\n"
+                "Run Setup / Repair… in the main window to install them.",
+                parent=self.win)
+            return False
+        return True
+
+    # ── Recording loop (background thread) ───────────────────────────────────
+
+    def _record_loop(self):
+        import sounddevice as sd
+        import numpy as np
+        import time
+
+        audio_buffer: list = []
+        last_flush = time.monotonic()
+
+        def callback(indata, frames, time_info, status):
+            audio_buffer.append(indata[:, 0].copy())   # mono channel
+
+        try:
+            with sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1,
+                                dtype="float32", callback=callback):
+                while not self._stop_event.is_set():
+                    now = time.monotonic()
+                    if now - last_flush >= self.CHUNK_SECS and audio_buffer:
+                        chunk = np.concatenate(audio_buffer)
+                        audio_buffer.clear()
+                        last_flush = now
+                        self._transcribe_chunk(chunk)
+                    time.sleep(0.1)
+
+                # Final chunk after Stop is pressed
+                if audio_buffer:
+                    self._transcribe_chunk(np.concatenate(audio_buffer))
+
+        except Exception as exc:
+            self.win.after(0, lambda e=str(exc): self._set_status(f"Audio error: {e}"))
+
+        self.win.after(0, self._on_finished)
+
+    def _transcribe_chunk(self, audio: "np.ndarray"):
+        import mlx_whisper
+
+        # Skip near-silent or extremely short clips
+        if len(audio) < self.SAMPLE_RATE * 0.5:
+            return
+
+        try:
+            result = mlx_whisper.transcribe(
+                audio,
+                path_or_hf_repo=self.app._current_model()[1],
+                verbose=False,
+            )
+            text = (result.get("text") or "").strip()
+            if text:
+                sep = " " if self._transcript else ""
+                self._transcript += sep + text
+                self.win.after(0, lambda t=self._transcript: self._update_text(t))
+        except Exception as exc:
+            self.win.after(
+                0, lambda e=str(exc): self._set_status(f"Transcription error: {e}"))
+
+    def _on_finished(self):
+        words = len(self._transcript.split()) if self._transcript else 0
+        self._set_status(
+            f"Done — {words} word{'s' if words != 1 else ''} transcribed")
+        if self._transcript:
+            self._save_btn.config(state="normal")
+
+    # ── Text area helpers ─────────────────────────────────────────────────────
+
+    def _update_text(self, text: str):
+        self._text.delete("1.0", tk.END)
+        self._text.insert("1.0", text)
+        self._text.see(tk.END)
+
+    def _set_status(self, msg: str):
+        self._status_var.set(msg)
+
+    def _copy(self):
+        text = self._text.get("1.0", tk.END).strip()
+        if text:
+            self.win.clipboard_clear()
+            self.win.clipboard_append(text)
+            self._set_status("Copied to clipboard.")
+
+    def _clear(self):
+        self._transcript = ""
+        self._text.delete("1.0", tk.END)
+        self._save_btn.config(state="disabled")
+        self._set_status("Cleared.")
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+
+    def _save(self):
+        text = self._text.get("1.0", tk.END).strip()
+        if not text:
+            return
+
+        fmt    = self.out_format.get()
+        outdir = self.app.outdir.get()
+        base   = "live_transcript_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if fmt == "txt":
+            path = os.path.join(outdir, base + ".txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self._set_status(f"Saved: {os.path.basename(path)}")
+        elif fmt == "pdf":
+            if self.app._write_pdf(text, base, outdir):
+                self._set_status(f"Saved: {base}.pdf")
+        elif fmt == "docx":
+            if self.app._write_docx(text, base, outdir):
+                self._set_status(f"Saved: {base}.docx")
+
+        subprocess.run(["open", outdir])
+
+    def _on_close(self):
+        if self._recording:
+            self._stop()
+        self.win.destroy()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Main Application
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class WhisperApp:
     def __init__(self, root: tk.Tk):
@@ -53,7 +345,7 @@ class WhisperApp:
         self.outdir       = tk.StringVar(value=os.path.expanduser("~/Desktop"))
         self.out_format   = tk.StringVar(value="txt")
         self.cleanup      = tk.BooleanVar(value=True)
-        self.mlx_installed = FROZEN   # already bundled when frozen
+        self.mlx_installed = FROZEN
         self.is_running   = False
         self._downloading = False
 
@@ -374,14 +666,14 @@ class WhisperApp:
         ttk.Button(grid, text="Choose…", command=self._pick_outdir
                    ).grid(row=2, column=2, padx=(8, 0))
 
-        # Row 3 — Output format
+        # Row 3 — Output format (6 options; padx=4 keeps them within the column)
         add_label("Format", 3)
         fmt_row = ttk.Frame(grid)
         fmt_row.grid(row=3, column=1, columnspan=2, sticky="w",
                      padx=(12, 0), pady=6)
         for fmt in OUTPUT_FORMATS:
             ttk.Radiobutton(fmt_row, text=fmt.upper(), variable=self.out_format,
-                            value=fmt).pack(side="left", padx=6)
+                            value=fmt).pack(side="left", padx=4)
 
         # Row 4 — Text cleanup
         add_label("Cleanup", 4)
@@ -391,10 +683,17 @@ class WhisperApp:
                         ).grid(row=4, column=1, columnspan=2, sticky="w",
                                padx=(12, 0), pady=6)
 
-        self.transcribe_btn = ttk.Button(main, text="Transcribe",
+        # Transcribe + Live buttons on the same row
+        btn_row = ttk.Frame(main)
+        btn_row.pack(pady=14)
+
+        self.transcribe_btn = ttk.Button(btn_row, text="Transcribe",
                                          command=self._transcribe,
                                          style="Go.TButton", state="disabled")
-        self.transcribe_btn.pack(pady=14)
+        self.transcribe_btn.pack(side="left", padx=(0, 10))
+
+        ttk.Button(btn_row, text="Live Transcribe…",
+                   command=self._open_live_window).pack(side="left")
 
         ttk.Label(main, text="Progress",
                   font=("Helvetica", 10, "bold")).pack(anchor="w")
@@ -470,7 +769,7 @@ class WhisperApp:
             paras.append(" ".join(cur))
         return "\n\n".join(paras) + "\n"
 
-    # ── Subtitle time formatters (API path) ───────────────────────────────────
+    # ── Subtitle time formatters ───────────────────────────────────────────────
 
     @staticmethod
     def _srt_time(sec: float) -> str:
@@ -487,6 +786,67 @@ class WhisperApp:
         s = int(sec % 60)
         ms = int(round((sec % 1) * 1000))
         return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+    # ── PDF / DOCX writers (shared by batch and live modes) ───────────────────
+
+    def _write_pdf(self, text: str, base: str, outdir: str) -> bool:
+        try:
+            from fpdf import FPDF  # noqa: PLC0415
+        except ImportError:
+            self._log("✗ fpdf2 not installed. Run Setup / Repair… to install it.")
+            return False
+        try:
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=20)
+            pdf.add_page()
+            pdf.set_margins(20, 20, 20)
+
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.cell(0, 10, base, new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(4)
+
+            pdf.set_font("Helvetica", size=11)
+            for para in text.split("\n\n"):
+                para = para.strip()
+                if para:
+                    pdf.multi_cell(0, 6, para)
+                    pdf.ln(3)
+
+            pdf.output(os.path.join(outdir, base + ".pdf"))
+            return True
+        except Exception as exc:
+            self._log(f"✗ PDF error: {exc}")
+            return False
+
+    def _write_docx(self, text: str, base: str, outdir: str) -> bool:
+        try:
+            from docx import Document           # noqa: PLC0415
+            from docx.shared import Inches, Pt  # noqa: PLC0415
+        except ImportError:
+            self._log("✗ python-docx not installed. Run Setup / Repair… to install it.")
+            return False
+        try:
+            doc = Document()
+            for section in doc.sections:
+                section.top_margin    = Inches(1)
+                section.bottom_margin = Inches(1)
+                section.left_margin   = Inches(1.25)
+                section.right_margin  = Inches(1.25)
+
+            doc.add_heading(base, level=0)
+
+            for para in text.split("\n\n"):
+                para = para.strip()
+                if para:
+                    p = doc.add_paragraph(para)
+                    for run in p.runs:
+                        run.font.size = Pt(11)
+
+            doc.save(os.path.join(outdir, base + ".docx"))
+            return True
+        except Exception as exc:
+            self._log(f"✗ DOCX error: {exc}")
+            return False
 
     # ── File queue ────────────────────────────────────────────────────────────
 
@@ -518,10 +878,14 @@ class WhisperApp:
         if path:
             self.outdir.set(path)
 
+    # ── Live transcription launcher ───────────────────────────────────────────
+
+    def _open_live_window(self):
+        LiveTranscribeWindow(self.root, self)
+
     # ── ffmpeg / environment ──────────────────────────────────────────────────
 
     def _build_env(self):
-        """Return an env dict with PATH that includes Homebrew and bundled ffmpeg."""
         env = os.environ.copy()
         extra = ["/opt/homebrew/bin", "/usr/local/bin"]
         if FROZEN:
@@ -584,7 +948,6 @@ class WhisperApp:
 
         def _do():
             if FROZEN:
-                # sys.executable is the app wrapper — call the library directly.
                 try:
                     from huggingface_hub import snapshot_download  # noqa: PLC0415
                     buf = io.StringIO()
@@ -624,14 +987,13 @@ class WhisperApp:
 
     def _transcribe_via_api(self, file_path: str, model: str,
                             outdir: str, fmt: str) -> bool:
-        """Use mlx_whisper Python API directly (required in py2app bundle)."""
         try:
             import mlx_whisper  # noqa: PLC0415
         except ImportError as exc:
             self._log(f"✗ mlx_whisper import failed: {exc}")
             return False
 
-        self._log("  Transcribing… (streaming progress not available in bundled mode)")
+        self._log("  Transcribing…")
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
@@ -670,6 +1032,15 @@ class WhisperApp:
                     f.write(f"{self._vtt_time(seg['start'])} --> "
                             f"{self._vtt_time(seg['end'])}\n"
                             f"{seg['text'].strip()}\n\n")
+
+        display_text = self._reflow_text(text) if self.cleanup.get() else text
+
+        if fmt in ("pdf", "all"):
+            self._write_pdf(display_text, base, outdir)
+
+        if fmt in ("docx", "all"):
+            self._write_docx(display_text, base, outdir)
+
         return True
 
     # ── Transcription — CLI path (venv / dev) ─────────────────────────────────
@@ -700,19 +1071,46 @@ class WhisperApp:
     def _transcribe_via_cli(self, file_path: str, model: str,
                             outdir: str, fmt: str,
                             mlx_exe: str, env: dict) -> bool:
-        """Use the mlx_whisper CLI via subprocess (venv / dev mode)."""
+        # PDF/DOCX need text content; map them to CLI's "txt" then post-process.
+        if fmt in ("pdf", "docx"):
+            cli_fmt, remove_txt = "txt", True
+        elif fmt == "all":
+            cli_fmt, remove_txt = "all", False
+        else:
+            cli_fmt, remove_txt = fmt, False
+
         cmd = [mlx_exe, file_path, "--model", model,
-               "--output-dir", outdir, "--output-format", fmt]
+               "--output-dir", outdir, "--output-format", cli_fmt]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, env=env)
         for line in proc.stdout:
             self._log(line.rstrip())
         proc.wait()
-        if proc.returncode == 0:
-            if self.cleanup.get() and fmt in ("txt", "all"):
-                self._cleanup_txt_output(file_path, outdir)
-            return True
-        return False
+
+        if proc.returncode != 0:
+            return False
+
+        base = os.path.splitext(os.path.basename(file_path))[0]
+
+        if self.cleanup.get() and cli_fmt in ("txt", "all"):
+            self._cleanup_txt_output(file_path, outdir)
+
+        # Build PDF / DOCX from the .txt the CLI wrote
+        txt_path = os.path.join(outdir, base + ".txt")
+        if fmt in ("pdf", "docx", "all") and os.path.exists(txt_path):
+            with open(txt_path, "r", encoding="utf-8") as f:
+                text = f.read()
+            if fmt in ("pdf", "all"):
+                self._write_pdf(text, base, outdir)
+            if fmt in ("docx", "all"):
+                self._write_docx(text, base, outdir)
+            if remove_txt:
+                try:
+                    os.remove(txt_path)
+                except OSError:
+                    pass
+
+        return True
 
     # ── Batch transcription entry point ───────────────────────────────────────
 

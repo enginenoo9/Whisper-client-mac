@@ -53,7 +53,7 @@ echo "→ Python: $PYTHON ($("$PYTHON" --version))"
 echo "→ Installing Python dependencies…"
 "$PYTHON" -m pip install --quiet --upgrade pip
 "$PYTHON" -m pip install --quiet --upgrade py2app
-"$PYTHON" -m pip install --quiet --upgrade mlx-whisper huggingface_hub
+"$PYTHON" -m pip install --quiet --upgrade mlx-whisper huggingface_hub fpdf2 python-docx sounddevice
 echo "  Done."
 echo ""
 

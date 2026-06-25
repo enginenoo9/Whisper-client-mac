@@ -58,7 +58,7 @@ else
 fi
 echo "→ Installing / updating mlx-whisper…"
 "$WHISPER_DIR/venv/bin/pip" install --upgrade pip >/dev/null
-"$WHISPER_DIR/venv/bin/pip" install --upgrade mlx-whisper
+"$WHISPER_DIR/venv/bin/pip" install --upgrade mlx-whisper fpdf2 python-docx sounddevice
 echo ""
 
 # --- 4. Place app files in ~/Whisper (predictable launcher paths) -----------
