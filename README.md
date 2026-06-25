@@ -1,113 +1,75 @@
 # Whisper Transcriber
 
-A simple Mac app for turning audio and video files into text transcripts. It
-runs OpenAI's Whisper models locally using Apple Silicon (via `mlx-whisper`) —
-nothing is uploaded to the cloud, and there's no subscription.
+A Mac app for turning audio and video files into text transcripts — in batch.
+Runs OpenAI's Whisper models locally via Apple Silicon (`mlx-whisper`). Nothing
+is uploaded to the cloud. No subscription.
 
-Pick a model, choose a file, click **Transcribe**, and a text transcript lands
-on your Desktop.
-
----
-
-## What's in this folder
-
-| File | Purpose |
-|------|---------|
-| `Whisper Transcriber.app` | The app you double-click to use it. |
-| `whisper_transcriber.py` | The actual program (the app launches this). |
-| `setup.command` | One-time installer. Run this first on a new Mac. |
-| `launch.command` | Backup launcher (does the same thing as the app). |
-| `whisper_icon.png` / `.icns` | The app icon, in case you want to re-apply it. |
+Queue up multiple files, pick a model, click **Transcribe N Files**, and transcripts
+land in your chosen folder automatically.
 
 ---
 
-## Requirements
+## Two ways to install
 
-- A Mac with Apple Silicon (M1 or newer recommended).
-- **Homebrew** installed — this is the one thing the setup can't install for
-  you. See the next section if you don't already have it.
+### Option A — Standalone DMG (recommended for sharing)
 
-Everything else (Python, ffmpeg, the Whisper engine) is installed automatically
-by `setup.command`.
+Build a self-contained `.app` that needs no Python, Homebrew, or setup at all.
+See **[Building the standalone app](#building-the-standalone-app)** below.
+Share the resulting DMG with anyone on an Apple Silicon Mac.
+
+### Option B — Self-installing app (this repo, for development)
+
+`Whisper Transcriber.app` auto-installs on first launch:
+
+1. Double-click `Whisper Transcriber.app`.
+2. If it's the first launch and the venv is missing, a dialog appears. Click
+   **Set Up & Open** — a Terminal window installs everything and then re-opens the
+   app automatically.
+3. That's it. Subsequent launches open instantly.
+
+**Only prerequisite:** Homebrew with Python (see below if you need it).
 
 ---
 
-## Step 0 — Install Homebrew (only if you don't have it)
+## Requirements (Option B only)
 
-Homebrew is a free tool that lets the setup script install what it needs. You
-only do this once per Mac. To check whether it's already installed, open
-**Terminal** (Applications → Utilities → Terminal) and type:
+- A Mac with Apple Silicon (M1 or newer).
+- **Homebrew** — the one thing that can't auto-install. See below.
+
+Everything else (Python, ffmpeg, the Whisper engine) installs itself on first launch.
+
+### Installing Homebrew
+
+Open **Terminal** and run:
 
 ```
-brew --version
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-If that prints a version number, you already have it — skip to Step 1.
-
-If it says "command not found," install it:
-
-1. Open **Terminal**.
-2. Paste this line and press Return:
-
-   ```
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   ```
-
-3. It will ask for your Mac password (the one you log in with) and pause to
-   confirm — press **Return** to continue. Installation takes a few minutes,
-   and it may install Apple's Command Line Tools along the way.
-
-4. **Important final step (Apple Silicon Macs):** when it finishes, it prints a
-   "Next steps" message asking you to run two lines to add Homebrew to your
-   PATH. Copy and run them. They look like this (use the exact lines the
-   installer shows you):
-
-   ```
-   echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-   eval "$(/opt/homebrew/bin/brew shellenv)"
-   ```
-
-5. Confirm it worked by running `brew --version` again — you should now see a
-   version number.
-
-That's it — Homebrew is installed. Now continue to Step 1.
-
----
-
-## Step 1 — First-time setup (new Mac)
-
-1. Put this whole folder somewhere convenient.
-2. Double-click **`setup.command`**.
-   - It installs Python, ffmpeg, and the Whisper engine.
-   - It copies the app files into your home folder at `~/Whisper/`.
-   - This takes a few minutes the first time. When it says
-     "Setup complete," you can close the window.
-3. Double-click **`Whisper Transcriber.app`** to open it.
-
-> **First launch note:** macOS may warn that the app is from an
-> "unidentified developer." Right-click the app → **Open** → **Open**. You only
-> need to do this once.
+After it finishes, run the two `shellenv` lines it prints (Apple Silicon only),
+then confirm with `brew --version`. Then open the app — it handles the rest.
 
 ---
 
 ## How to use it
 
 1. Open the app.
-2. **Model** — pick the quality/speed you want:
-   - *Large V3* — best accuracy, slowest, ~3 GB
-   - *Medium* — great balance (default), ~1.5 GB
-   - *Small* — fast, ~460 MB
-   - *Base* — fastest, ~145 MB
-3. **Audio file** — click *Choose…* and pick your podcast, recording, or video.
-4. **Save to** — defaults to your Desktop; change it if you like.
-5. **Format** — `TXT` for a plain transcript (most common). `SRT`/`VTT` are
-   subtitle formats for video. `ALL` makes all three.
-6. **Cleanup** — leave checked to merge the choppy per-segment line breaks into
-   readable paragraphs.
-7. Click **Transcribe**.
+2. **Model** — pick quality vs. speed:
+   - *Large V3* — best accuracy (~3 GB)
+   - *Medium* — great balance, default (~1.5 GB)
+   - *Small* — fast (~460 MB)
+   - *Base* — fastest (~145 MB)
+3. **Files** — click **Add Files…** to queue one or more audio/video files.
+   Select multiple at once with Shift- or Command-click. Remove individual
+   files with **Remove** or the Delete key. **Clear All** empties the queue.
+4. **Save to** — defaults to your Desktop.
+5. **Format** — `TXT` for a plain transcript. `SRT`/`VTT` are subtitle formats.
+   `ALL` writes all three.
+6. **Cleanup** — merges choppy per-segment line breaks into readable paragraphs.
+7. Click **Transcribe 1 File** / **Transcribe N Files**.
 
-The first time you use a given model it downloads automatically (one time, then
-cached). When it finishes, the folder with your transcript opens automatically.
+Files are processed one at a time in order. The current file is highlighted in
+the queue. When the last one finishes, the output folder opens automatically.
 
 Your last choices (model, format, save folder) are remembered next time.
 
@@ -115,61 +77,92 @@ Your last choices (model, format, save folder) are remembered next time.
 
 ## Models
 
-- **Download button** — pre-downloads the selected model so you don't wait
-  during transcription. If a model is already downloaded, the button shows
-  "Downloaded ✓" and is greyed out.
-- Models are cached in `~/.cache/huggingface` and only download once.
+- **Download** — pre-fetches the selected model so you don't wait during
+  transcription. Shows "Downloaded ✓" once cached.
+- Models are stored in `~/.cache/huggingface` and only download once per Mac.
 
 ---
 
-## Maintenance
+## Maintenance (Option B)
 
-Buttons in the bottom-right of the app:
+- **Setup / Repair…** — re-runs the installer. Use this to update mlx-whisper
+  or fix a broken environment.
+- **Clean up…** — frees disk space:
+  - *Delete downloaded models* — removes the AI models (re-download on next use).
+  - *Uninstall everything* — removes models and Python packages, then quits.
+    Run `setup.command` again to reinstall.
 
-- **Setup / Repair…** — re-runs the installer (useful if something breaks or to
-  update the Whisper engine).
-- **Clean up…** — opens a dialog to free disk space:
-  - *Delete downloaded models* — removes the AI models (they re-download next
-    time you need them). Reversible.
-  - *Uninstall everything* — removes the models **and** the Python packages,
-    then quits. To use the app again, run `setup.command` once more.
+---
+
+## Building the standalone app
+
+Run this once on an Apple Silicon Mac that has Homebrew:
+
+```bash
+brew install python-tk ffmpeg   # if not already installed
+./build.sh
+```
+
+`build.sh` will:
+1. Install `py2app` and `mlx-whisper` into your Homebrew Python.
+2. Bundle the app, Python runtime, all ML dependencies, and ffmpeg into a
+   single `dist/Whisper Transcriber.app` (~500 MB).
+3. Create `dist/Whisper-Transcriber-2.0.dmg` — drag-to-install, no setup needed.
+
+**Distributing:** share the DMG. Recipients open it, drag the app to
+Applications, and launch it. No Homebrew, no Terminal, no setup required.
+
+**First-launch Gatekeeper warning:** macOS will say "unidentified developer."
+Right-click the app → **Open** → **Open** (once only). This goes away if you
+sign with an Apple Developer ID certificate (`codesign --sign "Developer ID…"`).
+
+### Files in this repo
+
+| File | Purpose |
+|---|---|
+| `whisper_transcriber.py` | Main GUI application |
+| `Whisper Transcriber.app` | Self-installing launcher (Option B) |
+| `setup.command` | Manual install / repair script |
+| `launch.command` | Fallback launcher (same as the app) |
+| `setup_py2app.py` | py2app build config (used by `build.sh`) |
+| `build.sh` | Builds the standalone .app and DMG |
+| `whisper_icon.icns` / `.png` | App icon |
 
 ---
 
 ## Troubleshooting
 
-**"Whisper Transcriber isn't set up yet" dialog**
-Run `setup.command` first. It creates everything the app needs.
+**First launch shows "Set Up & Open" dialog**
+Click it — the app sets itself up automatically. Requires Homebrew Python.
 
-**App icon looks generic / wrong**
-Finder sometimes caches icons. Move the app to a different folder, or log out
-and back in, and it'll refresh.
+**"ffmpeg not found" in the log**
+Run **Setup / Repair…** — it installs ffmpeg via Homebrew.
 
-**"ffmpeg not found" in the progress log**
-Run **Setup / Repair…** (or `setup.command`) — it installs ffmpeg.
-
-**Setup says "Homebrew is not installed"**
-Do Step 0 above to install Homebrew, then run `setup.command` again. On Apple
-Silicon, don't skip the PATH step (the two `shellenv` lines) — without it, the
-setup won't find `brew`.
+**"Homebrew Python not found" dialog**
+Install Homebrew and run `brew install python-tk`, then reopen the app.
 
 **Transcription is slow**
-Larger models are slower. Try *Medium* or *Small*. On Apple Silicon, *Medium*
-typically transcribes a 1-hour file in a few minutes.
+Use *Medium* or *Small*. On M1, Medium transcribes ~1 hour of audio in a few
+minutes.
 
-**Window looks broken / black / labels missing**
-This happens with Apple's old built-in Python. The app avoids it by using the
-Homebrew Python that `setup.command` installs — so make sure you ran setup and
-are opening the app (not running the script with the system Python).
+**Window looks broken or labels are missing**
+Make sure you're opening `Whisper Transcriber.app`, not running the `.py` file
+with the system Python. The app uses the Homebrew Python installed by setup.
+
+**Build fails (`./build.sh`)**
+Make sure `brew install python-tk` succeeded and that Python reports a version
+≥ 3.12. The `mlx-whisper` package requires Apple Silicon.
 
 ---
 
-## How it works (for the curious)
+## How it works
 
-- The app is a small launcher that runs `whisper_transcriber.py` using a Python
-  virtual environment at `~/Whisper/venv`.
-- That environment has `mlx-whisper`, which runs Whisper models accelerated by
-  Apple's MLX framework.
-- `ffmpeg` decodes the audio; Whisper transcribes it; the result is written as
-  a text (or subtitle) file.
-- Everything runs locally on your Mac. No audio leaves the machine.
+- The GUI is a tkinter Python app (`whisper_transcriber.py`).
+- In the **self-installing version**: a bash launcher bootstraps a venv at
+  `~/Whisper/venv`, installs `mlx-whisper`, then runs the GUI with that Python.
+  The GUI calls the `mlx_whisper` CLI via subprocess for each file.
+- In the **standalone version** (py2app): Python, all ML packages, and ffmpeg
+  are bundled inside the `.app`. The GUI calls the `mlx_whisper` Python API
+  directly (no subprocess needed).
+- MLX runs Whisper models accelerated by Apple's GPU via the Metal framework.
+- `ffmpeg` decodes audio. Whisper transcribes it. Everything stays on your Mac.
