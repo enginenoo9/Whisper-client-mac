@@ -25,7 +25,7 @@ echo "==================================================="
 echo ""
 
 # ── 1. Locate Homebrew Python (must have tkinter) ────────────────────────────
-PYTHON=""
+SYS_PYTHON=""
 for c in \
     /opt/homebrew/bin/python3.14 \
     /opt/homebrew/bin/python3.13 \
@@ -36,20 +36,28 @@ for c in \
     if [ -x "$c" ]; then
         # Confirm tkinter works with this Python
         if "$c" -c "import tkinter" 2>/dev/null; then
-            PYTHON="$c"
+            SYS_PYTHON="$c"
             break
         fi
     fi
 done
 
-if [ -z "$PYTHON" ]; then
+if [ -z "$SYS_PYTHON" ]; then
     echo "✗ No Homebrew Python with tkinter found."
     echo "  Fix: brew install python-tk"
     exit 1
 fi
-echo "→ Python: $PYTHON ($("$PYTHON" --version))"
+echo "→ Python: $SYS_PYTHON ($("$SYS_PYTHON" --version))"
 
-# ── 2. Install / update build + runtime deps ─────────────────────────────────
+# ── 2. Build virtualenv + install build/runtime deps ─────────────────────────
+# Homebrew's Python is "externally managed" (PEP 668), so we cannot pip install
+# into it directly. Build everything inside a dedicated venv instead. The venv
+# inherits tkinter from the Homebrew Python it is created from.
+VENV=".build-venv"
+echo "→ Creating build virtualenv ($VENV)…"
+"$SYS_PYTHON" -m venv "$VENV"
+PYTHON="$VENV/bin/python"
+
 echo "→ Installing Python dependencies…"
 "$PYTHON" -m pip install --quiet --upgrade pip
 "$PYTHON" -m pip install --quiet --upgrade py2app
