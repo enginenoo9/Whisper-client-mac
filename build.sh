@@ -25,14 +25,19 @@ echo "==================================================="
 echo ""
 
 # ── 1. Locate Homebrew Python (must have tkinter) ────────────────────────────
+# Preference order matters: py2app's module finder is unreliable on Python
+# 3.14 (RecursionError / "No module named …" during bundling), so prefer the
+# well-supported 3.12, then 3.13, and only fall back to 3.14 as a last resort.
 SYS_PYTHON=""
 for c in \
-    /opt/homebrew/bin/python3.14 \
-    /opt/homebrew/bin/python3.13 \
     /opt/homebrew/bin/python3.12 \
-    /usr/local/bin/python3.14 \
+    /opt/homebrew/bin/python3.13 \
+    /opt/homebrew/bin/python3.11 \
+    /opt/homebrew/bin/python3.14 \
+    /usr/local/bin/python3.12 \
     /usr/local/bin/python3.13 \
-    /usr/local/bin/python3.12; do
+    /usr/local/bin/python3.11 \
+    /usr/local/bin/python3.14; do
     if [ -x "$c" ]; then
         # Confirm tkinter works with this Python
         if "$c" -c "import tkinter" 2>/dev/null; then
@@ -44,7 +49,7 @@ done
 
 if [ -z "$SYS_PYTHON" ]; then
     echo "✗ No Homebrew Python with tkinter found."
-    echo "  Fix: brew install python-tk"
+    echo "  Fix: brew install python-tk@3.12"
     exit 1
 fi
 echo "→ Python: $SYS_PYTHON ($("$SYS_PYTHON" --version))"
