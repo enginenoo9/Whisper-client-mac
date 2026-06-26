@@ -187,3 +187,12 @@ Make sure `brew install python-tk` succeeded and that Python reports a version
 - **PDF output** uses `fpdf2`. **DOCX output** uses `python-docx`.
 - **Live transcription** uses `sounddevice` to capture 10-second audio chunks
   from the microphone, then passes each chunk directly to `mlx_whisper.transcribe()`.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+OpenAI's Whisper models and `mlx-whisper` are licensed separately under the MIT
+License by their respective authors.
