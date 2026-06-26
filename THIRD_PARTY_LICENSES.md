@@ -1,12 +1,9 @@
 # Third-Party Licenses
 
-Whisper Transcriber is distributed under the [MIT License](LICENSE). It uses and,
-in the **standalone (py2app/DMG) build**, *bundles* a number of third-party
-components. Those components remain under their own licenses, reproduced or
-referenced below.
-
-The two copyleft components — **ffmpeg** and **fpdf2** — are the ones that carry
-extra obligations when redistributed. See the notes under each.
+Whisper Transcriber is distributed under the [MIT License](LICENSE). It does not
+bundle third-party code — its dependencies install at runtime into a local
+virtual environment (via `pip`) and via Homebrew (`ffmpeg`). Each remains under
+its own license, reproduced or referenced below.
 
 | Component | Used for | License | Project |
 |---|---|---|---|
@@ -18,29 +15,21 @@ extra obligations when redistributed. See the notes under each.
 | `python-docx` | DOCX output | MIT | https://github.com/python-openxml/python-docx |
 | `sounddevice` | Microphone capture | MIT | https://github.com/spatialaudio/python-sounddevice |
 | PortAudio (via `sounddevice`) | Audio I/O backend | MIT-style | https://www.portaudio.com |
-| `py2app` (build only) | App bundling | MIT | https://github.com/ronaldoussoren/py2app |
 | Python & Tkinter (Tcl/Tk) | Runtime & GUI | PSF / BSD-style | https://www.python.org |
 | **`fpdf2`** | PDF output | **LGPL-3.0** | https://github.com/py-pdf/fpdf2 |
 | **ffmpeg** | Audio/video decoding | **LGPL-2.1+ / GPL** (build-dependent) | https://ffmpeg.org |
 
-## Copyleft components (important for redistribution)
+## Copyleft components
 
-### ffmpeg — LGPL-2.1-or-later / GPL
-The standalone build stages a Homebrew-built `ffmpeg` binary into the `.app`
-(`build.sh` → `bin/ffmpeg` → bundled by `setup_py2app.py`). Homebrew's ffmpeg is
-typically a **GPL** build (it enables GPL-only components). When you redistribute
-a DMG containing this binary, you must comply with ffmpeg's license, including
-making the corresponding source available and preserving its copyright and
-license notices. See https://ffmpeg.org/legal.html.
+These two are not MIT-licensed. Because Whisper Transcriber installs them at
+runtime rather than redistributing them, the obligations fall on whoever
+distributes the binaries (Homebrew for ffmpeg, PyPI for `fpdf2`). If you ever
+repackage or redistribute the app together with these components, review their
+terms:
 
-If you want to avoid GPL obligations, build/bundle an **LGPL** ffmpeg
-(configured `--disable-gpl --disable-nonfree`) instead.
-
-### fpdf2 — LGPL-3.0-only
-`fpdf2` is bundled (standalone build) and imported at runtime for PDF export.
-Under the LGPL you must keep its license/notices intact and allow users to
-relink against a modified version of the library. The full text is available at
-https://www.gnu.org/licenses/lgpl-3.0.html.
+- **ffmpeg** — LGPL-2.1-or-later / GPL (Homebrew's build is typically GPL). See
+  https://ffmpeg.org/legal.html.
+- **`fpdf2`** — LGPL-3.0-only. See https://www.gnu.org/licenses/lgpl-3.0.html.
 
 ## MIT license text (covers the MIT-licensed components above)
 

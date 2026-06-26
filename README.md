@@ -9,29 +9,24 @@ land in your chosen folder automatically.
 
 ---
 
-## Two ways to install
-
-### Option A — Standalone DMG (recommended for sharing)
-
-Build a self-contained `.app` that needs no Python, Homebrew, or setup at all.
-See **[Building the standalone app](#building-the-standalone-app)** below.
-Share the resulting DMG with anyone on an Apple Silicon Mac.
-
-### Option B — Self-installing app (this repo, for development)
+## Install
 
 `Whisper Transcriber.app` auto-installs on first launch:
 
 1. Double-click `Whisper Transcriber.app`.
-2. If it's the first launch and the venv is missing, a dialog appears. Click
+2. If it's the first launch and the environment is missing, a dialog appears. Click
    **Set Up & Open** — a Terminal window installs everything and then re-opens the
    app automatically.
 3. That's it. Subsequent launches open instantly.
+
+You can also run the scripts directly: double-click **`setup.command`** to install,
+then **`launch.command`** to start the app.
 
 **Only prerequisite:** Homebrew with Python (see below if you need it).
 
 ---
 
-## Requirements (Option B only)
+## Requirements
 
 - A Mac with Apple Silicon (M1 or newer).
 - **Homebrew** — the one thing that can't auto-install. See below.
@@ -101,7 +96,7 @@ macOS will prompt for microphone permission on first use.
 
 ---
 
-## Maintenance (Option B)
+## Maintenance
 
 - **Setup / Repair…** — re-runs the installer. Use this to update mlx-whisper
   or fix a broken environment.
@@ -112,38 +107,14 @@ macOS will prompt for microphone permission on first use.
 
 ---
 
-## Building the standalone app
-
-Run this once on an Apple Silicon Mac that has Homebrew:
-
-```bash
-brew install python-tk ffmpeg   # if not already installed
-./build.sh
-```
-
-`build.sh` will:
-1. Install `py2app`, `mlx-whisper`, `fpdf2`, `python-docx`, and `sounddevice` into your Homebrew Python.
-2. Bundle the app, Python runtime, all ML dependencies, and ffmpeg into a
-   single `dist/Whisper Transcriber.app` (~500 MB).
-3. Create `dist/Whisper-Transcriber-2.0.dmg` — drag-to-install, no setup needed.
-
-**Distributing:** share the DMG. Recipients open it, drag the app to
-Applications, and launch it. No Homebrew, no Terminal, no setup required.
-
-**First-launch Gatekeeper warning:** macOS will say "unidentified developer."
-Right-click the app → **Open** → **Open** (once only). This goes away if you
-sign with an Apple Developer ID certificate (`codesign --sign "Developer ID…"`).
-
-### Files in this repo
+## Files in this repo
 
 | File | Purpose |
 |---|---|
 | `whisper_transcriber.py` | Main GUI application |
-| `Whisper Transcriber.app` | Self-installing launcher (Option B) |
+| `Whisper Transcriber.app` | Self-installing launcher |
 | `setup.command` | Manual install / repair script |
 | `launch.command` | Fallback launcher (same as the app) |
-| `setup_py2app.py` | py2app build config (used by `build.sh`) |
-| `build.sh` | Builds the standalone .app and DMG |
 | `whisper_icon.icns` / `.png` | App icon |
 
 ---
@@ -167,21 +138,14 @@ minutes.
 Make sure you're opening `Whisper Transcriber.app`, not running the `.py` file
 with the system Python. The app uses the Homebrew Python installed by setup.
 
-**Build fails (`./build.sh`)**
-Make sure `brew install python-tk` succeeded and that Python reports a version
-≥ 3.12. The `mlx-whisper` package requires Apple Silicon.
-
 ---
 
 ## How it works
 
 - The GUI is a tkinter Python app (`whisper_transcriber.py`).
-- In the **self-installing version**: a bash launcher bootstraps a venv at
-  `~/Whisper/venv`, installs `mlx-whisper`, then runs the GUI with that Python.
-  The GUI calls the `mlx_whisper` CLI via subprocess for each file.
-- In the **standalone version** (py2app): Python, all ML packages, and ffmpeg
-  are bundled inside the `.app`. The GUI calls the `mlx_whisper` Python API
-  directly (no subprocess needed).
+- A bash launcher bootstraps a venv at `~/Whisper/venv`, installs `mlx-whisper`,
+  then runs the GUI with that Python. The GUI calls the `mlx_whisper` CLI via
+  subprocess for each file.
 - MLX runs Whisper models accelerated by Apple's GPU via the Metal framework.
 - `ffmpeg` decodes audio. Whisper transcribes it. Everything stays on your Mac.
 - **PDF output** uses `fpdf2`. **DOCX output** uses `python-docx`.
@@ -194,13 +158,8 @@ Make sure `brew install python-tk` succeeded and that Python reports a version
 
 This project is licensed under the [MIT License](LICENSE).
 
-It uses — and the standalone DMG build **bundles** — third-party components that
-remain under their own licenses. Most are MIT (OpenAI Whisper, `mlx`,
-`mlx-whisper`, `python-docx`, `sounddevice`), but two are copyleft and carry
-extra redistribution obligations:
-
-- **ffmpeg** — LGPL-2.1+/GPL (Homebrew builds are typically GPL)
-- **`fpdf2`** — LGPL-3.0
-
-If you redistribute a DMG, review these obligations. Full details and the
-complete component list are in **[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)**.
+It relies on third-party components that install at runtime (via Homebrew and
+pip) and remain under their own licenses. Most are MIT (OpenAI Whisper, `mlx`,
+`mlx-whisper`, `python-docx`, `sounddevice`); **ffmpeg** (LGPL-2.1+/GPL) and
+`fpdf2` (LGPL-3.0) are copyleft. The full component list is in
+**[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)**.

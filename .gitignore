@@ -13,12 +13,6 @@ __pycache__/
 *.pyo
 venv/
 .venv/
-.build-venv/
-
-# Build artifacts
-build/
-dist/
-bin/
 
 # Config saved at runtime
 whisper_transcriber_config.json
