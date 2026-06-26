@@ -63,7 +63,6 @@ then confirm with `brew --version`. Then open the app — it handles the rest.
    - `SRT` / `VTT` — subtitle formats (with timestamps)
    - `PDF` — formatted PDF document
    - `DOCX` — Word-compatible document
-   - `ALL` — writes TXT, SRT, and VTT together
 6. **Cleanup** — merges choppy per-segment line breaks into readable paragraphs.
 7. Click **Transcribe 1 File** / **Transcribe N Files**.
 
