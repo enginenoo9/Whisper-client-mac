@@ -86,7 +86,12 @@ if [ -z "$FFMPEG_SRC" ]; then
     FFMPEG_SRC="$(brew --prefix)/bin/ffmpeg"
 fi
 
+# Homebrew's ffmpeg binary is read-only, so a leftover copy from a previous
+# run can't be overwritten by cp. Remove any stale copy first, then make the
+# staged copy writable so future runs can replace it cleanly.
+rm -f bin/ffmpeg
 cp "$FFMPEG_SRC" bin/ffmpeg
+chmod u+w bin/ffmpeg
 echo "  Staged: $FFMPEG_SRC → bin/ffmpeg"
 echo ""
 
