@@ -1,0 +1,134 @@
+#!/bin/bash
+#
+# Whisper Transcriber — launcher
+#
+# First launch: detects missing setup, installs everything automatically.
+# Subsequent launches: instant start, no Terminal required.
+#
+
+WHISPER_DIR="$HOME/Whisper"
+VENV_PY="$WHISPER_DIR/venv/bin/python"
+APP_PY="$WHISPER_DIR/whisper_transcriber.py"
+
+# Resolve the bundle location (works in /Applications or anywhere else)
+BUNDLE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+BUNDLED_PY="$BUNDLE_DIR/Contents/Resources/whisper_transcriber.py"
+
+# ── Ensure ~/Whisper exists and has the latest Python script ───────────────────
+mkdir -p "$WHISPER_DIR"
+
+# Sync bundled script → ~/Whisper on every launch so updates propagate
+if [ -f "$BUNDLED_PY" ]; then
+    cp "$BUNDLED_PY" "$APP_PY"
+fi
+
+# Copy helpers if they sit next to the .app (classic download layout)
+PARENT_DIR="$(dirname "$BUNDLE_DIR")"
+for helper in setup.command launch.command; do
+    src="$PARENT_DIR/$helper"
+    dst="$WHISPER_DIR/$helper"
+    if [ -f "$src" ] && [ ! -f "$dst" ]; then
+        cp "$src" "$dst"
+        chmod +x "$dst"
+    fi
+done
+
+# ── Fast path: already set up → just launch ────────────────────────────────────
+if [ -x "$VENV_PY" ] && [ -f "$APP_PY" ]; then
+    exec "$VENV_PY" "$APP_PY"
+fi
+
+# ── First-run: locate Homebrew Python (required for Tk + mlx-whisper) ──────────
+BREW_PYTHON=""
+for cand in \
+    /opt/homebrew/bin/python3.14 \
+    /opt/homebrew/bin/python3.13 \
+    /opt/homebrew/bin/python3.12 \
+    /usr/local/bin/python3.14 \
+    /usr/local/bin/python3.13 \
+    /usr/local/bin/python3.12; do
+    if [ -x "$cand" ]; then
+        BREW_PYTHON="$cand"
+        break
+    fi
+done
+
+if [ -z "$BREW_PYTHON" ]; then
+    osascript << 'OSA'
+tell application "System Events"
+    set dlg to display dialog "Whisper Transcriber needs a one-time setup, but couldn't find Homebrew Python.
+
+To fix this:
+  1. Install Homebrew from brew.sh (free, takes ~5 min)
+  2. Open Terminal and run:
+       brew install python-tk ffmpeg
+  3. Re-open Whisper Transcriber — setup finishes automatically." \
+        with title "Whisper Transcriber — Setup Required" \
+        buttons {"Open brew.sh", "OK"} default button "OK" with icon caution
+    if button returned of dlg is "Open brew.sh" then
+        open location "https://brew.sh"
+    end if
+end tell
+OSA
+    exit 1
+fi
+
+# ── Ask the user before doing anything ────────────────────────────────────────
+CONFIRM=$(osascript << 'OSA'
+tell application "System Events"
+    set dlg to display dialog "Whisper Transcriber needs a one-time setup:
+
+  • Creates a Python environment in ~/Whisper/
+  • Installs the mlx-whisper transcription engine
+  • Installs ffmpeg (via Homebrew) for audio decoding
+
+A Terminal window will open to show progress (~2–5 min on first run), then the app launches automatically." \
+        with title "Whisper Transcriber — First Run" \
+        buttons {"Cancel", "Set Up & Open"} \
+        default button "Set Up & Open" with icon note
+    return button returned of dlg
+end tell
+OSA
+)
+
+[ "$CONFIRM" != "Set Up & Open" ] && exit 0
+
+# ── Write a self-contained setup script and run it in a Terminal window ────────
+TMPSCRIPT=$(mktemp /tmp/whisper_setup_XXXXXX.command)
+# shellcheck disable=SC2086
+cat > "$TMPSCRIPT" << SCRIPT
+#!/bin/bash
+set -e
+echo "==================================================="
+echo "  Whisper Transcriber — First Run Setup"
+echo "==================================================="
+echo ""
+
+WHISPER_DIR="\$HOME/Whisper"
+BREW_PYTHON="${BREW_PYTHON}"
+
+echo "→ Installing ffmpeg (needed for audio decoding)…"
+brew install ffmpeg || true
+echo ""
+
+if [ ! -d "\$WHISPER_DIR/venv" ]; then
+    echo "→ Creating Python environment in ~/Whisper/venv…"
+    "\$BREW_PYTHON" -m venv "\$WHISPER_DIR/venv"
+fi
+
+echo "→ Installing mlx-whisper transcription engine…"
+"\$WHISPER_DIR/venv/bin/pip" install --quiet --upgrade pip
+"\$WHISPER_DIR/venv/bin/pip" install --upgrade mlx-whisper
+echo ""
+echo "==================================================="
+echo "  ✓ Setup complete!  Opening Whisper Transcriber…"
+echo "==================================================="
+sleep 1
+open -a "Whisper Transcriber"
+# Clean up this temp script
+rm -f "$TMPSCRIPT"
+SCRIPT
+
+chmod +x "$TMPSCRIPT"
+osascript -e "tell application \"Terminal\" to do script \"exec bash '$TMPSCRIPT'\""
+osascript -e 'tell application "Terminal" to activate'
