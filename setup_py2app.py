@@ -4,6 +4,14 @@ Run via build.sh — do not invoke directly.
 """
 
 import os
+import sys
+
+# py2app's modulegraph walks the full import AST recursively. On large
+# dependency trees (mlx, huggingface_hub, …) and newer Pythons this can blow
+# past the default recursion limit, raising RecursionError during the build.
+# Raise the ceiling well above the default 1000 before py2app runs.
+sys.setrecursionlimit(10000)
+
 from setuptools import setup
 
 APP = ["whisper_transcriber.py"]
