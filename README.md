@@ -116,6 +116,12 @@ macOS will prompt for microphone permission on first use.
 | `launch.command` | Fallback launcher (same as the app) |
 | `whisper_icon.icns` / `.png` | App icon |
 
+> **Editing the GUI:** the `.app` ships its own copy of `whisper_transcriber.py`
+> at `Contents/Resources/` and reinstalls it into `~/Whisper/` on every launch.
+> After editing the top-level `whisper_transcriber.py`, run
+> `./scripts/sync-bundled-app.sh` to update the bundled copy. CI fails if the two
+> drift apart.
+
 ---
 
 ## Troubleshooting

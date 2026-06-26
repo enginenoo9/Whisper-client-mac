@@ -1,0 +1,18 @@
+name: Bundle sync check
+
+# Fails if the app bundle's copy of whisper_transcriber.py has drifted from
+# the canonical top-level file. The .app launcher reinstalls its bundled copy
+# on every launch, so the two must stay identical.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check-bundle-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify bundled app copy is in sync
+        run: ./scripts/sync-bundled-app.sh --check
