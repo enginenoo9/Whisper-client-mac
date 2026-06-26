@@ -43,8 +43,6 @@ OPTIONS = {
         "mlx",
         "mlx_whisper",
         "huggingface_hub",
-        "tokenizers",
-        "safetensors",
         "tqdm",
         "filelock",
         "packaging",
