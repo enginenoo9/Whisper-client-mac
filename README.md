@@ -194,5 +194,13 @@ Make sure `brew install python-tk` succeeded and that Python reports a version
 
 This project is licensed under the [MIT License](LICENSE).
 
-OpenAI's Whisper models and `mlx-whisper` are licensed separately under the MIT
-License by their respective authors.
+It uses — and the standalone DMG build **bundles** — third-party components that
+remain under their own licenses. Most are MIT (OpenAI Whisper, `mlx`,
+`mlx-whisper`, `python-docx`, `sounddevice`), but two are copyleft and carry
+extra redistribution obligations:
+
+- **ffmpeg** — LGPL-2.1+/GPL (Homebrew builds are typically GPL)
+- **`fpdf2`** — LGPL-3.0
+
+If you redistribute a DMG, review these obligations. Full details and the
+complete component list are in **[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)**.
