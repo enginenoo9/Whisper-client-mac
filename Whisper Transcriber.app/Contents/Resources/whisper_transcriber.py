@@ -2,7 +2,7 @@
 """
 Whisper Transcriber — macOS GUI for mlx-whisper.
 Batch transcription of files + chunk-based live microphone transcription.
-Output formats: TXT, SRT, VTT, PDF, DOCX, or all at once.
+Output formats: TXT, SRT, VTT, PDF, or DOCX.
 """
 
 import contextlib
@@ -36,7 +36,7 @@ MODELS = [
     ("Base      — Fastest        (~145 MB)", "mlx-community/whisper-base-mlx"),
 ]
 # SRT/VTT carry timestamps, so they don't apply to live mode.
-OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx", "all"]
+OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
 LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
 CONFIG_PATH = os.path.expanduser("~/Whisper/whisper_transcriber_config.json")
@@ -1010,14 +1010,14 @@ class WhisperApp:
         text     = (result.get("text") or "").strip()
         segments = result.get("segments") or []
 
-        if fmt in ("txt", "all"):
+        if fmt == "txt":
             content = self._reflow_text(text) if self.cleanup.get() else text + "\n"
             with open(os.path.join(outdir, base + ".txt"), "w", encoding="utf-8") as f:
                 f.write(content)
             if self.cleanup.get():
                 self._log("✓ Cleaned up line breaks in transcript.")
 
-        if fmt in ("srt", "all"):
+        if fmt == "srt":
             with open(os.path.join(outdir, base + ".srt"), "w", encoding="utf-8") as f:
                 for i, seg in enumerate(segments, 1):
                     f.write(f"{i}\n"
@@ -1025,7 +1025,7 @@ class WhisperApp:
                             f"{self._srt_time(seg['end'])}\n"
                             f"{seg['text'].strip()}\n\n")
 
-        if fmt in ("vtt", "all"):
+        if fmt == "vtt":
             with open(os.path.join(outdir, base + ".vtt"), "w", encoding="utf-8") as f:
                 f.write("WEBVTT\n\n")
                 for seg in segments:
@@ -1035,10 +1035,10 @@ class WhisperApp:
 
         display_text = self._reflow_text(text) if self.cleanup.get() else text
 
-        if fmt in ("pdf", "all"):
+        if fmt == "pdf":
             self._write_pdf(display_text, base, outdir)
 
-        if fmt in ("docx", "all"):
+        if fmt == "docx":
             self._write_docx(display_text, base, outdir)
 
         return True
@@ -1074,8 +1074,6 @@ class WhisperApp:
         # PDF/DOCX need text content; map them to CLI's "txt" then post-process.
         if fmt in ("pdf", "docx"):
             cli_fmt, remove_txt = "txt", True
-        elif fmt == "all":
-            cli_fmt, remove_txt = "all", False
         else:
             cli_fmt, remove_txt = fmt, False
 
@@ -1092,17 +1090,17 @@ class WhisperApp:
 
         base = os.path.splitext(os.path.basename(file_path))[0]
 
-        if self.cleanup.get() and cli_fmt in ("txt", "all"):
+        if self.cleanup.get() and cli_fmt == "txt":
             self._cleanup_txt_output(file_path, outdir)
 
         # Build PDF / DOCX from the .txt the CLI wrote
         txt_path = os.path.join(outdir, base + ".txt")
-        if fmt in ("pdf", "docx", "all") and os.path.exists(txt_path):
+        if fmt in ("pdf", "docx") and os.path.exists(txt_path):
             with open(txt_path, "r", encoding="utf-8") as f:
                 text = f.read()
-            if fmt in ("pdf", "all"):
+            if fmt == "pdf":
                 self._write_pdf(text, base, outdir)
-            if fmt in ("docx", "all"):
+            if fmt == "docx":
                 self._write_docx(text, base, outdir)
             if remove_txt:
                 try:
