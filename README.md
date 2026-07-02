@@ -68,10 +68,15 @@ internet access (to download Python from python.org):
 ./build-dmg.sh
 ```
 
-This downloads and verifies the official python.org macOS installer, extracts
-`Python.framework` from it (no system-wide Python install happens), stages a
-copy of Homebrew's `ffmpeg`, bundles both into `Whisper Transcriber.app`,
-ad-hoc code-signs it, and produces `dist/Whisper-Transcriber-<version>.dmg`.
+This downloads the official python.org macOS installer and, via the vendored
+`relocatable-python` tool (see `vendor/relocatable-python/README.md`),
+extracts `Python.framework` and rewrites its binaries so they work from
+inside an app bundle instead of only from `/Library/Frameworks/` — the
+official installer's framework is hard-coded to that one absolute path, so
+copying it as-is crashes at launch. No system-wide Python install happens.
+The script then stages a copy of Homebrew's `ffmpeg`, bundles both into
+`Whisper Transcriber.app`, ad-hoc code-signs it, and produces
+`dist/Whisper-Transcriber-<version>.dmg`.
 
 mlx-whisper itself is *not* bundled — it's a namespace package with runtime
 Metal shader compilation that breaks every static bundler (this project tried

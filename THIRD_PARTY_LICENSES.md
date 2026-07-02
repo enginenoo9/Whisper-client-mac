@@ -28,6 +28,7 @@ Distribution depends on how you got the app:
 | Python & Tkinter (Tcl/Tk) | Runtime & GUI | PSF / BSD-style | https://www.python.org |
 | **`fpdf2`** | PDF output | **LGPL-3.0** | https://github.com/py-pdf/fpdf2 |
 | **ffmpeg** | Audio/video decoding | **LGPL-2.1+ / GPL** (build-dependent) | https://ffmpeg.org |
+| `relocatable-python` (build-time only, vendored in `vendor/`) | Makes the bundled Python.framework work outside `/Library/Frameworks/` | Apache-2.0 | https://github.com/gregneagle/relocatable-python |
 
 ## Copyleft components
 
@@ -44,6 +45,15 @@ These two are not MIT-licensed.
   license terms.
 - **`fpdf2`** — LGPL-3.0-only, installed at runtime via `pip`, not bundled.
   See https://www.gnu.org/licenses/lgpl-3.0.html.
+
+## Build-time-only tool
+
+`vendor/relocatable-python/` (Apache-2.0, by Greg Neagle) is vendored source
+used by `build-dmg.sh` to patch the bundled Python.framework's binaries so
+they work outside `/Library/Frameworks/`. It runs only on the build machine —
+its own source files aren't copied into the app or the DMG, only their
+effect (patched Mach-O binaries) is. See `vendor/relocatable-python/README.md`
+and `LICENSE` for the full attribution.
 
 ## MIT license text (covers the MIT-licensed components above)
 

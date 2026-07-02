@@ -36,7 +36,6 @@ DMG_NAME="Whisper-Transcriber-${VERSION}"
 # Bump this to pick up a newer Python. Must be a released "macOS 64-bit
 # universal2 installer" build — check https://www.python.org/downloads/macos/
 PYTHON_VERSION="3.12.8"
-PYTHON_PKG_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-macos11.pkg"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$ROOT_DIR/.build-dmg"
@@ -82,93 +81,36 @@ FRAMEWORKS_DIR="$APP_DST/Contents/Frameworks"
 RESOURCES_DIR="$APP_DST/Contents/Resources"
 mkdir -p "$FRAMEWORKS_DIR" "$RESOURCES_DIR/bin"
 
-# ── 2. Download + verify the official python.org installer ──────────────────
-PKG_PATH="$BUILD_DIR/python.pkg"
-echo "→ Downloading Python ${PYTHON_VERSION} from python.org…"
-curl -fL --progress-bar -o "$PKG_PATH" "$PYTHON_PKG_URL"
+# ── 2. Build a relocatable Python.framework ──────────────────────────────────
+# python.org's official installer produces a Python.framework whose binaries
+# have their shared-library path hard-coded to /Library/Frameworks/... —
+# copy it into the app bundle as-is and it crashes at launch with a
+# "Library not loaded" dyld error the moment it runs from anywhere else.
+# vendor/relocatable-python (see that directory's README) downloads the same
+# official installer over HTTPS and rewrites those Mach-O load-command paths
+# with install_name_tool so the framework works from any location, then
+# re-signs the binaries it touched.
+echo "→ Building a relocatable Python ${PYTHON_VERSION} framework…"
+python3 "$ROOT_DIR/vendor/relocatable-python/make_relocatable_python_framework.py" \
+    --destination "$FRAMEWORKS_DIR" \
+    --python-version "$PYTHON_VERSION" \
+    --os-version "11" \
+    --without-pip
 
-echo "→ Verifying Apple code signature on the installer…"
-if ! pkgutil --check-signature "$PKG_PATH" | grep -q "Status: signed"; then
-    echo "✗ python.org installer signature could not be verified — aborting."
-    echo "  Do not proceed with an unsigned/tampered installer."
+FW_VERSION_DIR="$FRAMEWORKS_DIR/Python.framework/Versions/Current"
+FW_PYTHON="$FW_VERSION_DIR/bin/python3"
+if [ ! -x "$FW_PYTHON" ]; then
+    echo "✗ Bundled Python binary missing after build: $FW_PYTHON"
     exit 1
 fi
-echo "  Signature OK."
-
-# ── 3. Extract Python.framework from the pkg (no system install) ────────────
-# The installer is a "distribution" package wrapping several component
-# sub-packages (framework, docs, IDLE, ...). `pkgutil --expand-full` is
-# supposed to recurse into those and decompress their payloads, but that
-# behavior is inconsistent across macOS versions. Do it manually instead:
-# expand just the outer shell, find the framework sub-package, and
-# decompress its Payload (a gzip'd cpio archive) directly — this is the
-# same technique long-standing tools like relocatable-python use.
-echo "→ Extracting Python.framework…"
-EXPAND_DIR="$BUILD_DIR/pkg-expanded"
-pkgutil --expand "$PKG_PATH" "$EXPAND_DIR"
-
-FRAMEWORK_SUBPKG="$EXPAND_DIR/Python_Framework.pkg"
-if [ ! -d "$FRAMEWORK_SUBPKG" ]; then
-    # Sub-package name has varied across releases — fall back to a search
-    # by identifier instead of assuming an exact directory name.
-    for d in "$EXPAND_DIR"/*.pkg; do
-        if [ -f "$d/PackageInfo" ] && grep -qi "pythonframework" "$d/PackageInfo"; then
-            FRAMEWORK_SUBPKG="$d"
-            break
-        fi
-    done
-fi
-
-if [ ! -d "$FRAMEWORK_SUBPKG" ] || [ ! -f "$FRAMEWORK_SUBPKG/Payload" ]; then
-    echo "✗ Could not locate the PythonFramework component package inside the installer."
-    echo "  Contents of $EXPAND_DIR:"
-    ls "$EXPAND_DIR"
-    exit 1
-fi
-echo "  Found: $(basename "$FRAMEWORK_SUBPKG")"
-
-PAYLOAD_DIR="$BUILD_DIR/payload-extracted"
-mkdir -p "$PAYLOAD_DIR"
-( cd "$PAYLOAD_DIR" && gzip -dc < "$FRAMEWORK_SUBPKG/Payload" | cpio -idm )
-
-FRAMEWORK_PAYLOAD=""
-if [ -x "$PAYLOAD_DIR/Versions/Current/bin/python3" ]; then
-    # The payload's cpio archive roots directly inside the framework (no
-    # "Python.framework/" wrapper folder) — this is the layout used by
-    # current python.org installers.
-    FRAMEWORK_PAYLOAD="$PAYLOAD_DIR"
-else
-    # Fall back to searching for a nested Python.framework directory, in
-    # case an older/alternate installer layout wraps it differently.
-    while IFS= read -r cand; do
-        if [ -x "$cand/Versions/Current/bin/python3" ]; then
-            FRAMEWORK_PAYLOAD="$cand"
-            break
-        fi
-    done < <(find "$PAYLOAD_DIR" -type d -name "Python.framework")
-fi
-
-if [ -z "$FRAMEWORK_PAYLOAD" ]; then
-    echo "✗ Payload decompressed but no usable Python.framework was found inside it."
-    echo "  Contents of $PAYLOAD_DIR:"
-    find "$PAYLOAD_DIR" -maxdepth 3
-    exit 1
-fi
-cp -R "$FRAMEWORK_PAYLOAD" "$FRAMEWORKS_DIR/Python.framework"
 
 # Trim bulk we don't need at runtime (test suites, docs, Tk demos).
-FW_VERSION_DIR="$FRAMEWORKS_DIR/Python.framework/Versions/Current"
 rm -rf "$FW_VERSION_DIR"/lib/python*/test \
        "$FW_VERSION_DIR"/lib/python*/idlelib \
        "$FW_VERSION_DIR"/lib/python*/turtledemo \
        "$FW_VERSION_DIR"/share/doc \
        2>/dev/null || true
 
-FW_PYTHON="$FW_VERSION_DIR/bin/python3"
-if [ ! -x "$FW_PYTHON" ]; then
-    echo "✗ Bundled Python binary missing after extraction: $FW_PYTHON"
-    exit 1
-fi
 echo "  Bundled: $("$FW_PYTHON" --version)"
 
 # ── 4. Stage ffmpeg (from Homebrew, build machine only) ──────────────────────
