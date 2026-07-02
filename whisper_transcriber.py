@@ -1162,8 +1162,25 @@ def _fix_macos_menu_bar_name():
         pass
 
 
+def _force_light_appearance():
+    """Info.plist sets NSRequiresAquaSystemAppearance to force light mode,
+    but — like CFBundleName — macOS only honors that if it can trace the
+    running process back to the bundle. It can't, for the same reason as
+    the menu bar fix above. Under native aqua theme (unlike the old clam
+    theme, which didn't follow system appearance at all) that means the
+    whole UI was following system Dark Mode instead of the light palette
+    it's designed for. Force it directly via AppKit."""
+    try:
+        from AppKit import NSApplication, NSAppearance
+        app = NSApplication.sharedApplication()
+        app.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameAqua"))
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    _fix_macos_menu_bar_name()
     root = tk.Tk()
+    _fix_macos_menu_bar_name()
+    _force_light_appearance()
     WhisperApp(root)
     root.mainloop()

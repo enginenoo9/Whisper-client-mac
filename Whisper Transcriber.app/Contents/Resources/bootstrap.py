@@ -91,8 +91,21 @@ class SetupWindow:
         self.root.geometry("480x360")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._force_light_appearance()
         self._build()
         self.root.after(200, self._start)
+
+    def _force_light_appearance(self):
+        # Best-effort: pyobjc isn't installed into the bundled framework
+        # Python this window runs under (only into the venv, by this same
+        # setup), so this usually no-ops here — see the matching, always-
+        # effective fix in whisper_transcriber.py for why it's needed at all.
+        try:
+            from AppKit import NSApplication, NSAppearance
+            app = NSApplication.sharedApplication()
+            app.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameAqua"))
+        except Exception:
+            pass
 
     def _build(self):
         # Native aqua theme (see WhisperApp._setup_theme in
