@@ -27,7 +27,7 @@ Distribution depends on how you got the app:
 | PortAudio (via `sounddevice`) | Audio I/O backend | MIT-style | https://www.portaudio.com |
 | `pyobjc-framework-Cocoa` | Corrects the macOS menu bar app name + forces light appearance | MIT | https://github.com/ronaldoussoren/pyobjc |
 | `pywebview` | Renders the GUI (HTML/CSS in a native WebView) | BSD-3-Clause | https://github.com/r0x0r/pywebview |
-| Python & Tkinter (Tcl/Tk) | Runtime & GUI | PSF / BSD-style | https://www.python.org |
+| Python & Tkinter (Tcl/Tk) | Runtime; Tkinter for the one-time setup window only (the app itself is pywebview) | PSF / BSD-style | https://www.python.org |
 | **`fpdf2`** | PDF output | **LGPL-3.0** | https://github.com/py-pdf/fpdf2 |
 | **ffmpeg** | Audio/video decoding | **LGPL-2.1+ / GPL** (build-dependent) | https://ffmpeg.org |
 | `relocatable-python` (build-time only, vendored in `vendor/`) | Makes the bundled Python.framework work outside `/Library/Frameworks/` | Apache-2.0 | https://github.com/gregneagle/relocatable-python |

@@ -109,9 +109,9 @@ class SetupWindow:
             pass
 
     def _build(self):
-        # Native aqua theme (see WhisperApp._setup_theme in
-        # whisper_transcriber.py for why: clam's Combobox/Checkbutton
-        # elements resist color styling and look dated).
+        # Native aqua theme for this window only — it's plain tkinter,
+        # running under the bundled framework Python before pywebview (what
+        # the real app UI uses) is even installed into the venv.
         style = ttk.Style(self.root)
         try:
             style.theme_use("aqua")
