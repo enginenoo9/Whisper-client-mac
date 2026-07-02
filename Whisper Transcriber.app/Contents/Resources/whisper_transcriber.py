@@ -5,8 +5,6 @@ Batch transcription of files + chunk-based live microphone transcription.
 Output formats: TXT, SRT, VTT, PDF, or DOCX.
 """
 
-import contextlib
-import io
 import json
 import os
 import re
@@ -17,9 +15,6 @@ import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
-
-# py2app sets sys.frozen; use Python API for all ML calls when bundled.
-FROZEN = getattr(sys, "frozen", False)
 
 # ── Palette (Apple-style light theme) ────────────────────────────────────────
 BG     = "#f5f5f7"   # window background — Apple's light gray
@@ -398,7 +393,7 @@ class WhisperApp:
         self.outdir       = tk.StringVar(value=os.path.expanduser("~/Desktop"))
         self.out_format   = tk.StringVar(value="txt")
         self.cleanup      = tk.BooleanVar(value=True)
-        self.mlx_installed = FROZEN
+        self.mlx_installed = False
         self.is_running   = False
         self._downloading = False
 
@@ -415,11 +410,7 @@ class WhisperApp:
         self._wire_persistence()
         self._refresh_download_btn()
 
-        if FROZEN:
-            self._status("Ready.")
-            self._refresh()
-        else:
-            self._check_install()
+        self._check_install()
 
     # ── HF model cache ────────────────────────────────────────────────────────
 
@@ -510,14 +501,13 @@ class WhisperApp:
         ttk.Label(frm, text="Removes the AI models only. They re-download on next use.",
                   style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
 
-        if not FROZEN:
-            ttk.Button(frm, text="Uninstall everything (models + packages)",
-                       command=lambda: (win.destroy(), self._full_uninstall())
-                       ).pack(fill="x", pady=(0, 2))
-            ttk.Label(frm,
-                      text="Removes models and all Python packages, then quits.\n"
-                           "Double-click setup again to reinstall.",
-                      style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
+        ttk.Button(frm, text="Uninstall everything (models + packages)",
+                   command=lambda: (win.destroy(), self._full_uninstall())
+                   ).pack(fill="x", pady=(0, 2))
+        ttk.Label(frm,
+                  text="Removes models and all Python packages, then quits.\n"
+                       "Reopen the app to set it up again.",
+                  style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
 
         ttk.Button(frm, text="Cancel", command=win.destroy).pack()
 
@@ -781,15 +771,13 @@ class WhisperApp:
 
         bottom = ttk.Frame(main)
         bottom.pack(fill="x", pady=(2, 0))
-        self.status_var = tk.StringVar(
-            value="Ready." if FROZEN else "Checking for mlx-whisper…")
+        self.status_var = tk.StringVar(value="Checking for mlx-whisper…")
         ttk.Label(bottom, textvariable=self.status_var,
                   style="Muted.TLabel").pack(side="left")
         ttk.Button(bottom, text="Clean up…",
                    command=self._open_cleanup_dialog).pack(side="right")
-        if not FROZEN:
-            ttk.Button(bottom, text="Setup / Repair…",
-                       command=self._run_setup).pack(side="right", padx=(0, 8))
+        ttk.Button(bottom, text="Setup / Repair…",
+                   command=self._run_setup).pack(side="right", padx=(0, 8))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -845,24 +833,6 @@ class WhisperApp:
         if cur:
             paras.append(" ".join(cur))
         return "\n\n".join(paras) + "\n"
-
-    # ── Subtitle time formatters ───────────────────────────────────────────────
-
-    @staticmethod
-    def _srt_time(sec: float) -> str:
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        ms = int(round((sec % 1) * 1000))
-        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-    @staticmethod
-    def _vtt_time(sec: float) -> str:
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        ms = int(round((sec % 1) * 1000))
-        return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
     # ── PDF / DOCX writers (shared by batch and live modes) ───────────────────
 
@@ -965,9 +935,6 @@ class WhisperApp:
     def _build_env(self):
         env = os.environ.copy()
         extra = ["/opt/homebrew/bin", "/usr/local/bin"]
-        if FROZEN:
-            resource_path = os.environ.get("RESOURCEPATH", "")
-            extra.insert(0, os.path.join(resource_path, "bin"))
         # Set by bootstrap.py when launched from the .app bundle — points at
         # Contents/Resources, where build-dmg.sh stages a bundled ffmpeg.
         bundle_resources = os.environ.get("WHISPER_BUNDLE_RESOURCES")
@@ -976,7 +943,7 @@ class WhisperApp:
         env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
         return env
 
-    # ── Install check (non-bundled only) ──────────────────────────────────────
+    # ── Install check ─────────────────────────────────────────────────────────
 
     def _check_install(self):
         def _check():
@@ -1029,30 +996,16 @@ class WhisperApp:
         self._log("  (cached after first download; large models take a while)")
 
         def _do():
-            if FROZEN:
-                try:
-                    from huggingface_hub import snapshot_download  # noqa: PLC0415
-                    buf = io.StringIO()
-                    with contextlib.redirect_stdout(buf):
-                        snapshot_download(repo_id=repo)
-                    for line in buf.getvalue().splitlines():
-                        if line.strip():
-                            self._log(line)
-                    ok = True
-                except Exception as exc:
-                    self._log(f"✗ {exc}")
-                    ok = False
-            else:
-                code = ("from huggingface_hub import snapshot_download;"
-                        f"snapshot_download(repo_id='{repo}')")
-                proc = subprocess.Popen([sys.executable, "-c", code],
-                                        stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True)
-                for line in proc.stdout:
-                    if line.strip():
-                        self._log(line.rstrip())
-                proc.wait()
-                ok = proc.returncode == 0
+            code = ("from huggingface_hub import snapshot_download;"
+                    f"snapshot_download(repo_id='{repo}')")
+            proc = subprocess.Popen([sys.executable, "-c", code],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                if line.strip():
+                    self._log(line.rstrip())
+            proc.wait()
+            ok = proc.returncode == 0
 
             self._downloading = False
             if ok:
@@ -1065,67 +1018,7 @@ class WhisperApp:
 
         threading.Thread(target=_do, daemon=True).start()
 
-    # ── Transcription — API path (py2app bundle) ──────────────────────────────
-
-    def _transcribe_via_api(self, file_path: str, model: str,
-                            outdir: str, fmt: str) -> bool:
-        try:
-            import mlx_whisper  # noqa: PLC0415
-        except ImportError as exc:
-            self._log(f"✗ mlx_whisper import failed: {exc}")
-            return False
-
-        self._log("  Transcribing…")
-        try:
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                result = mlx_whisper.transcribe(
-                    file_path, path_or_hf_repo=model, verbose=True)
-            for line in buf.getvalue().splitlines():
-                if line.strip():
-                    self._log(line)
-        except Exception as exc:
-            self._log(f"✗ {exc}")
-            return False
-
-        base     = os.path.splitext(os.path.basename(file_path))[0]
-        text     = (result.get("text") or "").strip()
-        segments = result.get("segments") or []
-
-        if fmt == "txt":
-            content = self._reflow_text(text) if self.cleanup.get() else text + "\n"
-            with open(os.path.join(outdir, base + ".txt"), "w", encoding="utf-8") as f:
-                f.write(content)
-            if self.cleanup.get():
-                self._log("✓ Cleaned up line breaks in transcript.")
-
-        if fmt == "srt":
-            with open(os.path.join(outdir, base + ".srt"), "w", encoding="utf-8") as f:
-                for i, seg in enumerate(segments, 1):
-                    f.write(f"{i}\n"
-                            f"{self._srt_time(seg['start'])} --> "
-                            f"{self._srt_time(seg['end'])}\n"
-                            f"{seg['text'].strip()}\n\n")
-
-        if fmt == "vtt":
-            with open(os.path.join(outdir, base + ".vtt"), "w", encoding="utf-8") as f:
-                f.write("WEBVTT\n\n")
-                for seg in segments:
-                    f.write(f"{self._vtt_time(seg['start'])} --> "
-                            f"{self._vtt_time(seg['end'])}\n"
-                            f"{seg['text'].strip()}\n\n")
-
-        display_text = self._reflow_text(text) if self.cleanup.get() else text
-
-        if fmt == "pdf":
-            self._write_pdf(display_text, base, outdir)
-
-        if fmt == "docx":
-            self._write_docx(display_text, base, outdir)
-
-        return True
-
-    # ── Transcription — CLI path (venv / dev) ─────────────────────────────────
+    # ── Transcription (mlx_whisper CLI in the venv) ───────────────────────────
 
     def _find_mlx_exe(self) -> str | None:
         venv_bin = os.path.dirname(sys.executable)
@@ -1209,20 +1102,19 @@ class WhisperApp:
         self._status(f"Transcribing {n} file{'s' if n > 1 else ''}… please wait.")
 
         env     = self._build_env()
-        mlx_exe = None if FROZEN else self._find_mlx_exe()
+        mlx_exe = self._find_mlx_exe()
 
         def _do():
             if not shutil.which("ffmpeg", path=env["PATH"]):
                 self.is_running = False
                 self._log("✗ ffmpeg not found.")
-                self._log("  Bundled ffmpeg is missing — reinstall the app."
-                          if FROZEN else
-                          "  Install it with:  brew install ffmpeg")
+                self._log("  DMG install: reinstall the app (bundled ffmpeg "
+                          "is missing). Source install: brew install ffmpeg")
                 self._status("ffmpeg required — see log.")
                 self._refresh()
                 return
 
-            if not FROZEN and mlx_exe is None:
+            if mlx_exe is None:
                 self.is_running = False
                 self._log("✗ mlx_whisper binary not found.")
                 self._log("  Run Setup / Repair… to fix the installation.")
@@ -1239,11 +1131,8 @@ class WhisperApp:
                 self._status(f"[{i}/{n}] Transcribing {name}…")
                 self.root.after(0, lambda idx=i - 1: self._highlight_queue_row(idx))
 
-                if FROZEN:
-                    ok = self._transcribe_via_api(file_path, model, outdir, fmt)
-                else:
-                    ok = self._transcribe_via_cli(
-                        file_path, model, outdir, fmt, mlx_exe, env)
+                ok = self._transcribe_via_cli(
+                    file_path, model, outdir, fmt, mlx_exe, env)
 
                 if ok:
                     self._log(f"✓ Saved to: {outdir}")
