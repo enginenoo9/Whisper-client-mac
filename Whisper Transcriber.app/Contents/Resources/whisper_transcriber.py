@@ -481,7 +481,14 @@ class Api:
     # ── Initial state ─────────────────────────────────────────────────────────
 
     def ready(self):
-        threading.Thread(target=self._check_install, daemon=True).start()
+        # Synchronous: the returned mlxInstalled value must already be
+        # correct, since the page only reads it once at startup to decide
+        # whether to show the "not installed" banner — a backgrounded check
+        # here previously raced ahead of that read, so a correct-but-late
+        # result had no way to un-show a banner already shown from stale
+        # data. (pywebview runs js_api calls off the main thread, so this
+        # brief pip-show subprocess doesn't block the window.)
+        self._check_install()
         return {
             "models":      [m[0] for m in MODELS],
             "formats":     OUTPUT_FORMATS,
@@ -585,8 +592,11 @@ class Api:
         r = subprocess.run([sys.executable, "-m", "pip", "show", "mlx-whisper"],
                            capture_output=True)
         self.mlx_installed = r.returncode == 0
-        self._status("Ready." if self.mlx_installed
-                     else "mlx-whisper not installed — click Install Now.")
+        if self.mlx_installed:
+            self._js("setInstallDone")
+            self._status("Ready.")
+        else:
+            self._status("mlx-whisper not installed — click Install Now.")
         self._refresh_transcribe()
 
     def install_mlx(self):
