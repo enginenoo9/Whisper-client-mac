@@ -1,0 +1,44 @@
+name: Build DMG
+
+# Builds the standalone DMG on a real macOS runner (hdiutil, pkgutil, and
+# codesign don't exist on Linux, so this workflow is the actual verification
+# for build-dmg.sh — not something that can be tested in a Linux dev sandbox).
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg (build-time dependency)
+        run: brew install ffmpeg
+
+      - name: Build DMG
+        run: ./build-dmg.sh
+
+      - name: Smoke-test the bundle
+        run: |
+          set -euo pipefail
+          APP="dist/Whisper Transcriber.app"
+          FW_PY="$APP/Contents/Frameworks/Python.framework/Versions/Current/bin/python3"
+
+          test -x "$FW_PY"
+          "$FW_PY" --version
+          "$FW_PY" -c "import tkinter; import venv"
+
+          test -x "$APP/Contents/Resources/bin/ffmpeg"
+          "$APP/Contents/Resources/bin/ffmpeg" -version | head -1
+
+          codesign --verify --deep --strict "$APP"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Whisper-Transcriber-dmg
+          path: dist/*.dmg

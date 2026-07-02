@@ -891,6 +891,11 @@ class WhisperApp:
         if FROZEN:
             resource_path = os.environ.get("RESOURCEPATH", "")
             extra.insert(0, os.path.join(resource_path, "bin"))
+        # Set by bootstrap.py when launched from the .app bundle — points at
+        # Contents/Resources, where build-dmg.sh stages a bundled ffmpeg.
+        bundle_resources = os.environ.get("WHISPER_BUNDLE_RESOURCES")
+        if bundle_resources:
+            extra.insert(0, os.path.join(bundle_resources, "bin"))
         env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
         return env
 
