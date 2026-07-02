@@ -30,6 +30,11 @@ if [ -x "$FRAMEWORK_PY" ]; then
     FW_VERSION_DIR="$BUNDLE_DIR/Contents/Frameworks/Python.framework/Versions/Current"
     export TCL_LIBRARY="$FW_VERSION_DIR/lib/tcl8.6"
     export TK_LIBRARY="$FW_VERSION_DIR/lib/tk8.6"
+    # Importing stdlib modules under the bundled framework Python (bootstrap.py
+    # itself does `import tkinter`, etc.) writes .pyc files into the signed
+    # Python.framework tree on first run, invalidating its code signature
+    # seal. Keep the framework read-only at runtime.
+    export PYTHONDONTWRITEBYTECODE=1
     exec "$FRAMEWORK_PY" "$BOOTSTRAP" "$BUNDLE_DIR"
 fi
 

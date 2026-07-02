@@ -25,6 +25,11 @@ jobs:
       - name: Smoke-test the bundle
         run: |
           set -euo pipefail
+          # Importing stdlib modules for the first time writes .pyc files into
+          # the framework's lib/ tree, which invalidates the seal codesign
+          # just computed — the verify step below would then fail against
+          # our own smoke-test side effects, not against a real signing bug.
+          export PYTHONDONTWRITEBYTECODE=1
           APP="dist/Whisper Transcriber.app"
           FW_VERSION_DIR="$APP/Contents/Frameworks/Python.framework/Versions/Current"
           FW_PY="$FW_VERSION_DIR/bin/python3"
