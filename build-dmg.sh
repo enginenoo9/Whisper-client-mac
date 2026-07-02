@@ -132,12 +132,21 @@ mkdir -p "$PAYLOAD_DIR"
 ( cd "$PAYLOAD_DIR" && gzip -dc < "$FRAMEWORK_SUBPKG/Payload" | cpio -idm )
 
 FRAMEWORK_PAYLOAD=""
-while IFS= read -r cand; do
-    if [ -x "$cand/Versions/Current/bin/python3" ]; then
-        FRAMEWORK_PAYLOAD="$cand"
-        break
-    fi
-done < <(find "$PAYLOAD_DIR" -type d -name "Python.framework")
+if [ -x "$PAYLOAD_DIR/Versions/Current/bin/python3" ]; then
+    # The payload's cpio archive roots directly inside the framework (no
+    # "Python.framework/" wrapper folder) — this is the layout used by
+    # current python.org installers.
+    FRAMEWORK_PAYLOAD="$PAYLOAD_DIR"
+else
+    # Fall back to searching for a nested Python.framework directory, in
+    # case an older/alternate installer layout wraps it differently.
+    while IFS= read -r cand; do
+        if [ -x "$cand/Versions/Current/bin/python3" ]; then
+            FRAMEWORK_PAYLOAD="$cand"
+            break
+        fi
+    done < <(find "$PAYLOAD_DIR" -type d -name "Python.framework")
+fi
 
 if [ -z "$FRAMEWORK_PAYLOAD" ]; then
     echo "✗ Payload decompressed but no usable Python.framework was found inside it."
