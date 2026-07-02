@@ -1,0 +1,62 @@
+name: Build DMG
+
+# Builds the standalone DMG on a real macOS runner (hdiutil, pkgutil, and
+# codesign don't exist on Linux, so this workflow is the actual verification
+# for build-dmg.sh — not something that can be tested in a Linux dev sandbox).
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg (build-time dependency)
+        run: brew install ffmpeg
+
+      - name: Build DMG
+        run: ./build-dmg.sh
+
+      - name: Smoke-test the bundle
+        run: |
+          set -euo pipefail
+          APP="dist/Whisper Transcriber.app"
+          FW_VERSION_DIR="$APP/Contents/Frameworks/Python.framework/Versions/Current"
+          FW_PY="$FW_VERSION_DIR/bin/python3"
+
+          test -x "$FW_PY"
+          "$FW_PY" --version
+          "$FW_PY" -c "import venv"
+
+          # Must be arm64-only — a leftover x86_64 slice is what triggers
+          # macOS's "this app uses Rosetta" deprecation notice, even though
+          # mlx-whisper (Apple Silicon only) could never execute it anyway.
+          if lipo -info "$FW_PY" | grep -q "x86_64"; then
+            echo "✗ $FW_PY still contains an x86_64 slice — thinning step failed"
+            exit 1
+          fi
+
+          # `import tkinter` alone doesn't initialize Tcl — it doesn't call
+          # Tk_Init()/Tcl_CreateInterp() until you construct Tk(), so it
+          # can't catch a broken/unrelocated init.tcl path. Actually
+          # construct a window, with the same TCL_LIBRARY/TK_LIBRARY the
+          # launcher sets, to catch that class of bug.
+          TCL_LIBRARY="$FW_VERSION_DIR/lib/tcl8.6" \
+          TK_LIBRARY="$FW_VERSION_DIR/lib/tk8.6" \
+          "$FW_PY" -c "import tkinter; tkinter.Tk()"
+
+          test -x "$APP/Contents/Resources/bin/ffmpeg"
+          "$APP/Contents/Resources/bin/ffmpeg" -version | head -1
+
+          codesign --verify --deep --strict "$APP"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Whisper-Transcriber-dmg
+          path: dist/*.dmg

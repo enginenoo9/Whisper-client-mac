@@ -16,3 +16,9 @@ venv/
 
 # Config saved at runtime
 whisper_transcriber_config.json
+
+# build-dmg.sh output and staging (Python.framework + ffmpeg are downloaded
+# at build time, never committed — see build-dmg.sh)
+.build-dmg/
+dist/
+*.dmg

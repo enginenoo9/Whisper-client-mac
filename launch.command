@@ -1,7 +1,8 @@
 #!/bin/bash
 #
-# Whisper Transcriber — launcher.
-# Opens the app using the virtual environment created by setup.command.
+# Whisper Transcriber — direct launcher (source-install path).
+# Runs the GUI straight from the venv, skipping the .app bundle entirely.
+# Requires a prior setup (setup.command, or any first launch of the .app).
 #
 VENV_PY="$HOME/Whisper/venv/bin/python"
 APP="$HOME/Whisper/whisper_transcriber.py"

@@ -1,41 +1,37 @@
 #!/usr/bin/env python3
 """
 Whisper Transcriber — macOS GUI for mlx-whisper.
+
+The UI is HTML/CSS/JS rendered inside a native macOS WebView (pywebview →
+WKWebView). Tkinter can't produce a modern-looking Mac app no matter how
+it's themed — its widget rendering tops out at a dated look — so the
+presentation layer lives in the embedded HTML below, and all the actual
+work (transcription, live capture, model download, file I/O) stays in
+Python, exposed to the page through pywebview's JS bridge.
+
 Batch transcription of files + chunk-based live microphone transcription.
 Output formats: TXT, SRT, VTT, PDF, or DOCX.
 """
 
-import contextlib
-import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
-import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
 
-# py2app sets sys.frozen; use Python API for all ML calls when bundled.
-FROZEN = getattr(sys, "frozen", False)
+import webview
 
-# ── Palette ───────────────────────────────────────────────────────────────────
-BG     = "#f0f0f0"
-TEXT   = "#1a1a1a"
-MUTED  = "#666666"
-ACCENT = "#0071e3"
-LOG_BG = "#1e1e1e"
-LOG_FG = "#d4d4d4"
-
+# ── Models & formats ──────────────────────────────────────────────────────────
 MODELS = [
-    ("Large V3  — Best accuracy  (~3 GB)",  "mlx-community/whisper-large-v3-mlx"),
-    ("Medium    — Great balance  (~1.5 GB)", "mlx-community/whisper-medium-mlx"),
-    ("Small     — Fast           (~460 MB)", "mlx-community/whisper-small-mlx"),
-    ("Base      — Fastest        (~145 MB)", "mlx-community/whisper-base-mlx"),
+    ("Large V3 — Best accuracy (~3 GB)",   "mlx-community/whisper-large-v3-mlx"),
+    ("Medium — Great balance (~1.5 GB)",   "mlx-community/whisper-medium-mlx"),
+    ("Small — Fast (~460 MB)",             "mlx-community/whisper-small-mlx"),
+    ("Base — Fastest (~145 MB)",           "mlx-community/whisper-base-mlx"),
 ]
-# SRT/VTT carry timestamps, so they don't apply to live mode.
 OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
 LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
@@ -44,329 +40,598 @@ DEFAULT_MODEL_INDEX = 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Live Transcription Window
+#  Front-end (HTML / CSS / JS rendered in the WebView)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class LiveTranscribeWindow:
-    """
-    Popup window that records from the default microphone in 10-second chunks,
-    transcribes each chunk with mlx-whisper, and accumulates the transcript.
-    """
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --text: #1d1d1f;
+    --muted: #86868b;
+    --border: #e3e3e6;
+    --accent: #0071e3;
+    --accent-press: #0060c4;
+    --field: #ffffff;
+    --log-bg: #1c1c1e;
+    --log-fg: #d6d6d6;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.05);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 28px 28px 40px; }
 
-    CHUNK_SECS  = 10     # seconds of audio per transcription pass
-    SAMPLE_RATE = 16000  # Hz — Whisper's native rate
+  header { text-align: center; margin-bottom: 22px; }
+  header h1 { font-size: 27px; font-weight: 700; letter-spacing: -.02em; margin: 0; }
+  header p  { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
 
-    def __init__(self, parent: tk.Widget, app: "WhisperApp"):
-        self.app = app
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
 
-        self.win = tk.Toplevel(parent)
-        self.win.title("Live Transcription")
-        self.win.configure(bg=BG)
-        self.win.geometry("600x500")
-        self.win.resizable(True, True)
-        self.win.minsize(480, 380)
-        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+  .row { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 12px; }
+  .row + .row { margin-top: 16px; }
+  .row > label.key { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .row .val { display: flex; align-items: center; gap: 10px; min-width: 0; }
 
-        self._recording   = False
-        self._stop_event  = threading.Event()
-        self._transcript  = ""
-        self._elapsed     = 0
-        self._timer_id    = None
-        self.out_format   = tk.StringVar(value="txt")
+  select, .btn {
+    font-family: inherit; font-size: 14px;
+    border-radius: 9px; border: 1px solid var(--border);
+    background: var(--field); color: var(--text);
+    padding: 9px 12px; cursor: pointer; transition: background .12s, border-color .12s, transform .04s;
+  }
+  select { flex: 1; min-width: 0; appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5L6 7.5L9 4.5' stroke='%2386868b' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat; background-position: right 11px center; padding-right: 30px; }
+  select:focus { outline: none; border-color: var(--accent); }
 
-        self._build()
-        self._setup_theme()
+  .btn:hover { background: #f5f5f7; }
+  .btn:active { transform: scale(.98); }
+  .btn:disabled { color: #b0b0b5; cursor: default; background: var(--field); }
+  .btn.primary {
+    background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600;
+  }
+  .btn.primary:hover { background: #0077ed; }
+  .btn.primary:active { background: var(--accent-press); }
+  .btn.primary:disabled { background: #a9cbf2; border-color: #a9cbf2; color: #fff; }
+  .btn.small { padding: 7px 12px; font-size: 13px; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--accent); }
+  .btn.ghost:hover { background: rgba(0,113,227,.08); }
+  .btn.block { width: 100%; }
 
-    # ── Theme (inherits from parent but applied locally) ──────────────────────
+  .filelist {
+    flex: 1; height: 116px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--field);
+    padding: 6px;
+  }
+  .filelist .empty { color: var(--muted); font-size: 13px; padding: 34px 10px; text-align: center; }
+  .filelist .item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px;
+    font-size: 13px; cursor: default;
+  }
+  .filelist .item.sel { background: var(--accent); color: #fff; }
+  .filelist .item .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .filebtns { display: flex; flex-direction: column; gap: 6px; }
 
-    def _setup_theme(self):
-        style = ttk.Style(self.win)
-        style.configure("Live.Go.TButton", font=("Helvetica", 13, "bold"), padding=6)
+  .path { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden;
+          text-overflow: ellipsis; flex: 1; }
 
-    # ── UI ────────────────────────────────────────────────────────────────────
+  .seg { display: inline-flex; background: #ececef; border-radius: 9px; padding: 2px; }
+  .seg button {
+    border: none; background: transparent; font: inherit; font-size: 13px;
+    padding: 6px 14px; border-radius: 7px; cursor: pointer; color: var(--text);
+    transition: background .12s;
+  }
+  .seg button.on { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.12); font-weight: 600; }
 
-    def _build(self):
-        frm = ttk.Frame(self.win, padding=(24, 16))
-        frm.pack(fill="both", expand=True)
+  .toggle { position: relative; width: 40px; height: 24px; flex: none; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle .slider {
+    position: absolute; inset: 0; background: #d1d1d6; border-radius: 999px; transition: background .18s;
+  }
+  .toggle .slider::before {
+    content: ""; position: absolute; width: 20px; height: 20px; left: 2px; top: 2px;
+    background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .18s;
+  }
+  .toggle input:checked + .slider { background: #34c759; }
+  .toggle input:checked + .slider::before { transform: translateX(16px); }
+  .toggle-row { display: flex; align-items: center; gap: 10px; }
+  .toggle-row .lbl { font-size: 13px; }
 
-        ttk.Label(frm, text="Live Transcription",
-                  style="Title.TLabel").pack(anchor="w", pady=(0, 2))
+  .actions { display: flex; justify-content: center; gap: 12px; margin: 4px 0 16px; }
+  .actions .btn { padding: 11px 26px; font-size: 15px; }
 
-        # Model + output format bar
-        info = ttk.Frame(frm)
-        info.pack(fill="x", pady=(0, 8))
+  .loglabel { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em;
+              text-transform: uppercase; margin: 0 2px 6px; }
+  .log {
+    background: var(--log-bg); color: var(--log-fg); border-radius: 12px;
+    font-family: "SF Mono", Menlo, Monaco, monospace; font-size: 12px; line-height: 1.5;
+    padding: 12px 14px; height: 150px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    user-select: text;
+  }
 
-        model_name = self.app._current_model()[0].split("—")[0].strip()
-        ttk.Label(info, text=f"Model: {model_name}",
-                  style="Muted.TLabel").pack(side="left")
+  footer { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+  footer .status { color: var(--muted); font-size: 13px; }
+  footer .fbtns { display: flex; gap: 6px; }
 
-        fmt_frm = ttk.Frame(info)
-        fmt_frm.pack(side="right")
-        ttk.Label(fmt_frm, text="Save as:", style="Muted.TLabel"
-                  ).pack(side="left", padx=(0, 6))
-        for fmt in LIVE_OUTPUT_FORMATS:
-            ttk.Radiobutton(fmt_frm, text=fmt.upper(),
-                            variable=self.out_format, value=fmt
-                            ).pack(side="left", padx=4)
+  .banner {
+    display: none; align-items: center; gap: 12px; background: #fff7e6; border: 1px solid #ffe2a8;
+    color: #7a5c00; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;
+  }
+  .banner.show { display: flex; }
+  .banner .btn { margin-left: auto; }
 
-        # Status line
-        self._status_var = tk.StringVar(
-            value="Ready — click Start Recording to begin")
-        ttk.Label(frm, textvariable=self._status_var,
-                  style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
+  /* Overlays (Live + Cleanup) */
+  .overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.28);
+    backdrop-filter: blur(4px); z-index: 10; align-items: center; justify-content: center;
+  }
+  .overlay.show { display: flex; }
+  .modal {
+    background: var(--card); border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    width: 540px; max-width: calc(100vw - 40px); padding: 24px 26px;
+  }
+  .modal h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.01em; }
+  .modal .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .modal .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                margin-bottom: 14px; flex-wrap: wrap; }
+  .live-text {
+    background: var(--field); border: 1px solid var(--border); border-radius: 12px;
+    height: 220px; overflow-y: auto; padding: 12px 14px; font-size: 14px; line-height: 1.55;
+    white-space: pre-wrap; word-break: break-word; user-select: text;
+  }
+  .live-text.empty { color: var(--muted); }
+  .modal .foot { display: flex; gap: 8px; margin-top: 16px; }
+  .modal .foot .spacer { flex: 1; }
+  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #ff3b30; display: inline-block;
+             margin-right: 6px; animation: pulse 1.1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Whisper Transcriber</h1>
+    <p>Local transcription · runs entirely on your Mac</p>
+  </header>
 
-        # Live transcript text area
-        txt_frm = ttk.Frame(frm)
-        txt_frm.pack(fill="both", expand=True, pady=(0, 10))
+  <div class="banner" id="banner">
+    <span>⚠ mlx-whisper is not installed.</span>
+    <button class="btn small" id="installBtn" onclick="installMlx()">Install Now</button>
+  </div>
 
-        self._text = tk.Text(
-            txt_frm, font=("Helvetica", 12),
-            bg="white", fg=TEXT, relief="flat",
-            highlightthickness=1,
-            highlightcolor="#b0b0b0", highlightbackground="#d0d0d0",
-            wrap="word", padx=8, pady=8,
-        )
-        sb = ttk.Scrollbar(txt_frm, orient="vertical",
-                           command=self._text.yview)
-        self._text.configure(yscrollcommand=sb.set)
-        self._text.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+  <div class="card">
+    <div class="row">
+      <label class="key">Model</label>
+      <div class="val">
+        <select id="model" onchange="onModel()"></select>
+        <button class="btn small" id="downloadBtn" onclick="downloadModel()">Download</button>
+      </div>
+    </div>
 
-        # Action buttons
-        btn_row = ttk.Frame(frm)
-        btn_row.pack(fill="x")
+    <div class="row">
+      <label class="key">Files</label>
+      <div class="val" style="align-items: stretch;">
+        <div class="filelist" id="filelist"></div>
+        <div class="filebtns">
+          <button class="btn small" onclick="addFiles()">Add Files…</button>
+          <button class="btn small" onclick="removeFiles()">Remove</button>
+          <button class="btn small" onclick="clearFiles()">Clear All</button>
+        </div>
+      </div>
+    </div>
 
-        self._toggle_btn = ttk.Button(btn_row, text="Start Recording",
-                                      command=self._toggle,
-                                      style="Go.TButton")
-        self._toggle_btn.pack(side="left")
+    <div class="row">
+      <label class="key">Save to</label>
+      <div class="val">
+        <span class="path" id="outdir"></span>
+        <button class="btn small" onclick="chooseOutdir()">Choose…</button>
+      </div>
+    </div>
 
-        ttk.Button(btn_row, text="Copy",
-                   command=self._copy).pack(side="left", padx=(8, 0))
-        ttk.Button(btn_row, text="Clear",
-                   command=self._clear).pack(side="left", padx=(4, 0))
+    <div class="row">
+      <label class="key">Format</label>
+      <div class="val"><div class="seg" id="format"></div></div>
+    </div>
 
-        self._save_btn = ttk.Button(btn_row, text="Save…",
-                                    command=self._save, state="disabled")
-        self._save_btn.pack(side="right")
+    <div class="row">
+      <label class="key">Cleanup</label>
+      <div class="val toggle-row">
+        <label class="toggle"><input type="checkbox" id="cleanup" onchange="onCleanup()"><span class="slider"></span></label>
+        <span class="lbl">Merge segment breaks into flowing paragraphs</span>
+      </div>
+    </div>
+  </div>
 
-    # ── Recording control ─────────────────────────────────────────────────────
+  <div class="actions">
+    <button class="btn primary" id="transcribeBtn" onclick="transcribe()" disabled>Transcribe</button>
+    <button class="btn" onclick="openLive()">Live Transcribe…</button>
+  </div>
 
-    def _toggle(self):
-        if self._recording:
-            self._stop()
-        else:
-            self._start()
+  <div class="loglabel">Progress</div>
+  <div class="log" id="log"></div>
 
-    def _start(self):
-        if not self._check_deps():
-            return
+  <footer>
+    <span class="status" id="status">Starting…</span>
+    <div class="fbtns">
+      <button class="btn ghost small" onclick="runSetup()">Setup / Repair…</button>
+      <button class="btn ghost small" onclick="openCleanup()">Clean up…</button>
+    </div>
+  </footer>
+</div>
 
-        self._recording = True
-        self._stop_event.clear()
-        self._elapsed = 0
-        self._toggle_btn.config(text="Stop Recording")
-        self._save_btn.config(state="disabled")
-        self._set_status("● Recording 0:00  (first transcript arrives in ~10 s)")
-        self._timer_id = self.win.after(1000, self._tick)
-        threading.Thread(target=self._record_loop, daemon=True).start()
+<!-- Live overlay -->
+<div class="overlay" id="liveOverlay">
+  <div class="modal">
+    <h2>Live Transcription</h2>
+    <p class="sub" id="liveModel"></p>
+    <div class="bar">
+      <div class="seg" id="liveFormat"></div>
+    </div>
+    <p class="sub" id="liveStatus">Ready — click Start Recording to begin</p>
+    <div class="live-text empty" id="liveText">Transcript will appear here…</div>
+    <div class="foot">
+      <button class="btn primary" id="recBtn" onclick="toggleRec()">Start Recording</button>
+      <button class="btn" onclick="liveCopy()">Copy</button>
+      <button class="btn" onclick="liveClear()">Clear</button>
+      <span class="spacer"></span>
+      <button class="btn" id="liveSaveBtn" onclick="liveSave()" disabled>Save…</button>
+      <button class="btn" onclick="closeLive()">Close</button>
+    </div>
+  </div>
+</div>
 
-    def _stop(self):
-        self._recording = False
-        self._stop_event.set()
-        if self._timer_id:
-            self.win.after_cancel(self._timer_id)
-        self._toggle_btn.config(text="Start Recording")
-        self._set_status("Finishing last chunk…")
+<!-- Cleanup overlay -->
+<div class="overlay" id="cleanupOverlay">
+  <div class="modal">
+    <h2>Clean up</h2>
+    <p class="sub" id="cleanupInfo">Checking disk usage…</p>
+    <div class="foot" style="flex-direction: column; align-items: stretch; gap: 8px;">
+      <button class="btn block" onclick="deleteModels()">Delete downloaded models</button>
+      <button class="btn block" onclick="uninstallAll()">Uninstall everything (models + packages)</button>
+      <button class="btn ghost block" onclick="closeCleanup()">Cancel</button>
+    </div>
+  </div>
+</div>
 
-    def _tick(self):
-        if not self._recording:
-            return
-        self._elapsed += 1
-        m, s = divmod(self._elapsed, 60)
-        self._set_status(f"● Recording {m}:{s:02d}")
-        self._timer_id = self.win.after(1000, self._tick)
+<script>
+  var STATE = { models: [], formats: [], liveFormats: [], format: "txt",
+                cleanup: true, modelIndex: 1, sel: [], recording: false };
 
-    # ── Dependency check ──────────────────────────────────────────────────────
+  function api() { return window.pywebview.api; }
 
-    def _check_deps(self) -> bool:
-        missing = []
-        try:
-            import sounddevice  # noqa: F401
-        except ImportError:
-            missing.append("sounddevice")
-        try:
-            import mlx_whisper  # noqa: F401
-        except ImportError:
-            missing.append("mlx_whisper")
+  // A rejected api() promise with no .catch() fails completely silently —
+  // that's exactly what hid the add-files bug. Route uncaught rejections
+  // through here so a future one shows up instead of vanishing.
+  function reportErr(e) { console.error(e); setStatus('Error — see log or try again.'); }
 
-        if missing:
-            pkg = " ".join(missing)
-            messagebox.showerror(
-                "Missing packages",
-                f"Live transcription needs: {pkg}\n\n"
-                "Run Setup / Repair… in the main window to install them.",
-                parent=self.win)
-            return False
-        return True
+  window.addEventListener('pywebviewready', function () {
+    api().ready().then(function (s) {
+      STATE.models = s.models; STATE.formats = s.formats; STATE.liveFormats = s.liveFormats;
+      STATE.format = s.format; STATE.cleanup = s.cleanup; STATE.modelIndex = s.modelIndex;
+      renderModels(); renderFormat(); renderLiveFormat();
+      document.getElementById('cleanup').checked = s.cleanup;
+      document.getElementById('outdir').textContent = s.outdir;
+      setStatus(s.mlxInstalled ? "Ready." : "mlx-whisper not installed — click Install Now.");
+      if (!s.mlxInstalled) document.getElementById('banner').classList.add('show');
+      setDownloadBtn(s.modelCached ? {enabled:false, text:"Downloaded ✓"} : {enabled:true, text:"Download"});
+      renderFiles([]);
+    }).catch(reportErr);
+  });
 
-    # ── Recording loop (background thread) ───────────────────────────────────
+  function renderModels() {
+    var sel = document.getElementById('model'); sel.innerHTML = '';
+    STATE.models.forEach(function (m, i) {
+      var o = document.createElement('option'); o.value = i; o.textContent = m;
+      if (i === STATE.modelIndex) o.selected = true; sel.appendChild(o);
+    });
+  }
+  function renderFormat() {
+    var box = document.getElementById('format'); box.innerHTML = '';
+    STATE.formats.forEach(function (f) {
+      var b = document.createElement('button'); b.textContent = f.toUpperCase();
+      if (f === STATE.format) b.className = 'on';
+      b.onclick = function () { STATE.format = f; renderFormat(); api().set_format(f); };
+      box.appendChild(b);
+    });
+  }
+  function renderLiveFormat() {
+    var box = document.getElementById('liveFormat'); box.innerHTML = '';
+    STATE.liveFmt = STATE.liveFmt || STATE.liveFormats[0];
+    STATE.liveFormats.forEach(function (f) {
+      var b = document.createElement('button'); b.textContent = f.toUpperCase();
+      if (f === STATE.liveFmt) b.className = 'on';
+      b.onclick = function () { STATE.liveFmt = f; renderLiveFormat(); };
+      box.appendChild(b);
+    });
+  }
+  function renderFiles(names) {
+    STATE.files = names; STATE.sel = [];
+    var box = document.getElementById('filelist'); box.innerHTML = '';
+    if (!names.length) { box.innerHTML = '<div class="empty">No files added yet</div>'; return; }
+    names.forEach(function (n, i) {
+      var d = document.createElement('div'); d.className = 'item';
+      d.innerHTML = '<span class="name">' + escapeHtml(n) + '</span>';
+      d.onclick = function () { toggleSel(i, d); };
+      box.appendChild(d);
+    });
+  }
+  function toggleSel(i, el) {
+    var p = STATE.sel.indexOf(i);
+    if (p >= 0) { STATE.sel.splice(p, 1); el.classList.remove('sel'); }
+    else { STATE.sel.push(i); el.classList.add('sel'); }
+  }
+  function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-    def _record_loop(self):
-        import sounddevice as sd
-        import numpy as np
-        import time
+  function onModel()   { STATE.modelIndex = parseInt(document.getElementById('model').value, 10);
+                         document.getElementById('liveModel').textContent = 'Model: ' + STATE.models[STATE.modelIndex].split('—')[0].trim();
+                         api().set_model(STATE.modelIndex); }
+  function onCleanup() { STATE.cleanup = document.getElementById('cleanup').checked; api().set_cleanup(STATE.cleanup); }
 
-        audio_buffer: list = []
-        last_flush = time.monotonic()
+  function addFiles()    { api().add_files().then(renderFiles).catch(reportErr); }
+  function removeFiles() { api().remove_files(STATE.sel).then(renderFiles).catch(reportErr); }
+  function clearFiles()  { api().clear_files().then(renderFiles).catch(reportErr); }
+  function chooseOutdir(){ api().choose_outdir().then(function (p) { document.getElementById('outdir').textContent = p; }).catch(reportErr); }
+  function downloadModel(){ api().download_model(); }
+  function transcribe()  { api().transcribe(); }
+  function runSetup()    { api().run_setup(); }
+  function installMlx()  { document.getElementById('installBtn').disabled = true;
+                           document.getElementById('installBtn').textContent = 'Installing…'; api().install_mlx(); }
 
-        def callback(indata, frames, time_info, status):
-            audio_buffer.append(indata[:, 0].copy())   # mono channel
+  // Live
+  function openLive() {
+    document.getElementById('liveModel').textContent = 'Model: ' + STATE.models[STATE.modelIndex].split('—')[0].trim();
+    document.getElementById('liveOverlay').classList.add('show');
+  }
+  function closeLive() { if (STATE.recording) api().live_stop(); document.getElementById('liveOverlay').classList.remove('show'); }
+  function toggleRec() {
+    if (STATE.recording) { api().live_stop(); }
+    else { api().live_start(STATE.liveFmt); }
+  }
+  function liveCopy()  { var t = document.getElementById('liveText'); navigator.clipboard && navigator.clipboard.writeText(t.textContent); liveStatus('Copied to clipboard.'); }
+  function liveClear() { api().live_clear(); setLiveText(''); document.getElementById('liveSaveBtn').disabled = true; }
+  function liveSave()  { api().live_save(STATE.liveFmt); }
 
-        try:
-            with sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1,
-                                dtype="float32", callback=callback):
-                while not self._stop_event.is_set():
-                    now = time.monotonic()
-                    if now - last_flush >= self.CHUNK_SECS and audio_buffer:
-                        chunk = np.concatenate(audio_buffer)
-                        audio_buffer.clear()
-                        last_flush = now
-                        self._transcribe_chunk(chunk)
-                    time.sleep(0.1)
+  // Cleanup
+  function openCleanup()  { document.getElementById('cleanupOverlay').classList.add('show');
+                            api().cleanup_info().then(function (s) {
+                              document.getElementById('cleanupInfo').textContent =
+                                s.count + ' model(s) downloaded — about ' + s.size + ' on disk.'; }).catch(reportErr); }
+  function closeCleanup() { document.getElementById('cleanupOverlay').classList.remove('show'); }
+  function deleteModels() { closeCleanup(); api().delete_models(); }
+  function uninstallAll() { if (confirm('Remove ALL models and Python packages, then quit?')) api().uninstall_everything(); }
 
-                # Final chunk after Stop is pressed
-                if audio_buffer:
-                    self._transcribe_chunk(np.concatenate(audio_buffer))
-
-        except Exception as exc:
-            self.win.after(0, lambda e=str(exc): self._set_status(f"Audio error: {e}"))
-
-        self.win.after(0, self._on_finished)
-
-    def _transcribe_chunk(self, audio: "np.ndarray"):
-        import mlx_whisper
-
-        # Skip near-silent or extremely short clips
-        if len(audio) < self.SAMPLE_RATE * 0.5:
-            return
-
-        try:
-            result = mlx_whisper.transcribe(
-                audio,
-                path_or_hf_repo=self.app._current_model()[1],
-                verbose=False,
-            )
-            text = (result.get("text") or "").strip()
-            if text:
-                sep = " " if self._transcript else ""
-                self._transcript += sep + text
-                self.win.after(0, lambda t=self._transcript: self._update_text(t))
-        except Exception as exc:
-            self.win.after(
-                0, lambda e=str(exc): self._set_status(f"Transcription error: {e}"))
-
-    def _on_finished(self):
-        words = len(self._transcript.split()) if self._transcript else 0
-        self._set_status(
-            f"Done — {words} word{'s' if words != 1 else ''} transcribed")
-        if self._transcript:
-            self._save_btn.config(state="normal")
-
-    # ── Text area helpers ─────────────────────────────────────────────────────
-
-    def _update_text(self, text: str):
-        self._text.delete("1.0", tk.END)
-        self._text.insert("1.0", text)
-        self._text.see(tk.END)
-
-    def _set_status(self, msg: str):
-        self._status_var.set(msg)
-
-    def _copy(self):
-        text = self._text.get("1.0", tk.END).strip()
-        if text:
-            self.win.clipboard_clear()
-            self.win.clipboard_append(text)
-            self._set_status("Copied to clipboard.")
-
-    def _clear(self):
-        self._transcript = ""
-        self._text.delete("1.0", tk.END)
-        self._save_btn.config(state="disabled")
-        self._set_status("Cleared.")
-
-    # ── Save ──────────────────────────────────────────────────────────────────
-
-    def _save(self):
-        text = self._text.get("1.0", tk.END).strip()
-        if not text:
-            return
-
-        fmt    = self.out_format.get()
-        outdir = self.app.outdir.get()
-        base   = "live_transcript_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        if fmt == "txt":
-            path = os.path.join(outdir, base + ".txt")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(text)
-            self._set_status(f"Saved: {os.path.basename(path)}")
-        elif fmt == "pdf":
-            if self.app._write_pdf(text, base, outdir):
-                self._set_status(f"Saved: {base}.pdf")
-        elif fmt == "docx":
-            if self.app._write_docx(text, base, outdir):
-                self._set_status(f"Saved: {base}.docx")
-
-        subprocess.run(["open", outdir])
-
-    def _on_close(self):
-        if self._recording:
-            self._stop()
-        self.win.destroy()
+  // ── Push targets (called from Python) ──
+  function pushLog(t)      { var l = document.getElementById('log'); l.textContent += t + "\n"; l.scrollTop = l.scrollHeight; }
+  function setStatus(t)    { document.getElementById('status').textContent = t; }
+  function setDownloadBtn(o){ var b = document.getElementById('downloadBtn'); b.disabled = !o.enabled; b.textContent = o.text; }
+  function setTranscribe(o){ var b = document.getElementById('transcribeBtn'); b.disabled = !o.enabled; b.textContent = o.label; }
+  function setInstallDone(){ document.getElementById('banner').classList.remove('show'); }
+  function setInstallRetry(){ var b = document.getElementById('installBtn'); b.disabled = false; b.textContent = 'Retry'; }
+  function setLiveText(t)  { var e = document.getElementById('liveText');
+                             if (t) { e.textContent = t; e.classList.remove('empty'); e.scrollTop = e.scrollHeight; }
+                             else { e.textContent = 'Transcript will appear here…'; e.classList.add('empty'); } }
+  function liveStatus(t)   { document.getElementById('liveStatus').innerHTML = t; }
+  function setRecording(r) { STATE.recording = r;
+                             document.getElementById('recBtn').textContent = r ? 'Stop Recording' : 'Start Recording'; }
+  function setLiveSave(on) { document.getElementById('liveSaveBtn').disabled = !on; }
+</script>
+</body>
+</html>"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Main Application
+#  Back-end (Python API exposed to the page)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class WhisperApp:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("Whisper Transcriber")
-        self.root.geometry("680x710")
-        self.root.resizable(False, False)
-        self.root.configure(bg=BG)
-
-        self._setup_theme()
-
+class Api:
+    def __init__(self):
+        self.window = None
         self._file_queue: list[str] = []
-        self.outdir       = tk.StringVar(value=os.path.expanduser("~/Desktop"))
-        self.out_format   = tk.StringVar(value="txt")
-        self.cleanup      = tk.BooleanVar(value=True)
-        self.mlx_installed = FROZEN
-        self.is_running   = False
-        self._downloading = False
-
         self._cfg = self._load_config()
-        if self._cfg.get("outdir") and os.path.isdir(self._cfg["outdir"]):
-            self.outdir.set(self._cfg["outdir"])
-        if self._cfg.get("format") in OUTPUT_FORMATS:
-            self.out_format.set(self._cfg["format"])
-        if "cleanup" in self._cfg:
-            self.cleanup.set(bool(self._cfg["cleanup"]))
+        self.outdir = self._cfg.get("outdir") if os.path.isdir(
+            self._cfg.get("outdir", "")) else os.path.expanduser("~/Desktop")
+        self.out_format = self._cfg.get("format") if self._cfg.get(
+            "format") in OUTPUT_FORMATS else "txt"
+        self.cleanup = bool(self._cfg.get("cleanup", True))
+        self.model_index = self._cfg.get("model", DEFAULT_MODEL_INDEX)
+        if not isinstance(self.model_index, int) or not (0 <= self.model_index < len(MODELS)):
+            self.model_index = DEFAULT_MODEL_INDEX
+        self.mlx_installed = False
+        self.is_running = False
+        self._downloading = False
+        # Live state
+        self._live_recording = False
+        self._live_stop = threading.Event()
+        self._live_transcript = ""
 
-        self._build()
-        self._apply_saved_model()
-        self._wire_persistence()
-        self._refresh_download_btn()
+    # ── JS bridge helpers ─────────────────────────────────────────────────────
 
-        if FROZEN:
-            self._status("Ready.")
-            self._refresh()
+    def _js(self, fn, *args):
+        if not self.window:
+            return
+        payload = ",".join(json.dumps(a) for a in args)
+        try:
+            self.window.evaluate_js(f"window.{fn}({payload})")
+        except Exception:
+            pass
+
+    def _log(self, msg):     self._js("pushLog", msg)
+    def _status(self, msg):  self._js("setStatus", msg)
+
+    def _current_model(self):
+        return MODELS[self.model_index]
+
+    # ── Initial state ─────────────────────────────────────────────────────────
+
+    def ready(self):
+        # Synchronous: the returned mlxInstalled value must already be
+        # correct, since the page only reads it once at startup to decide
+        # whether to show the "not installed" banner — a backgrounded check
+        # here previously raced ahead of that read, so a correct-but-late
+        # result had no way to un-show a banner already shown from stale
+        # data. (pywebview runs js_api calls off the main thread, so this
+        # brief pip-show subprocess doesn't block the window.)
+        self._check_install()
+        return {
+            "models":      [m[0] for m in MODELS],
+            "formats":     OUTPUT_FORMATS,
+            "liveFormats": LIVE_OUTPUT_FORMATS,
+            "format":      self.out_format,
+            "cleanup":     self.cleanup,
+            "modelIndex":  self.model_index,
+            "outdir":      self.outdir,
+            "mlxInstalled": self.mlx_installed,
+            "modelCached": self._model_is_cached(self._current_model()[1]),
+        }
+
+    # ── Config ────────────────────────────────────────────────────────────────
+
+    def _load_config(self):
+        try:
+            with open(CONFIG_PATH) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_config(self):
+        data = {"model": self.model_index, "format": self.out_format,
+                "outdir": self.outdir, "cleanup": self.cleanup}
+        try:
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
+    def set_model(self, index):
+        self.model_index = int(index)
+        self._save_config()
+        self._js("setDownloadBtn",
+                 {"enabled": False, "text": "Downloaded ✓"}
+                 if self._model_is_cached(self._current_model()[1])
+                 else {"enabled": True, "text": "Download"})
+
+    def set_format(self, fmt):
+        if fmt in OUTPUT_FORMATS:
+            self.out_format = fmt
+            self._save_config()
+
+    def set_cleanup(self, flag):
+        self.cleanup = bool(flag)
+        self._save_config()
+
+    # ── File queue ────────────────────────────────────────────────────────────
+
+    def add_files(self):
+        # pywebview validates each filter description against
+        # ^([\w ]+)\(...\)$ — word chars and spaces only. A "/" (as in the
+        # previous "Audio / Video Files") fails that regex and raises
+        # ValueError before the dialog even opens, which silently killed
+        # this button (JS called it with .then() and no .catch()).
+        types = ("Media Files (*.mp3;*.mp4;*.m4a;*.wav;*.flac;*.aac;*.ogg;*.mkv;*.webm)",
+                 "All files (*.*)")
+        try:
+            result = self.window.create_file_dialog(
+                webview.FileDialog.OPEN, allow_multiple=True, file_types=types)
+        except Exception as exc:
+            self._log(f"✗ Couldn't open file picker: {exc}")
+            return [os.path.basename(p) for p in self._file_queue]
+        if result:
+            for p in result:
+                if p not in self._file_queue:
+                    self._file_queue.append(p)
+        self._refresh_transcribe()
+        return [os.path.basename(p) for p in self._file_queue]
+
+    def remove_files(self, indices):
+        for i in sorted((int(x) for x in indices), reverse=True):
+            if 0 <= i < len(self._file_queue):
+                del self._file_queue[i]
+        self._refresh_transcribe()
+        return [os.path.basename(p) for p in self._file_queue]
+
+    def clear_files(self):
+        self._file_queue.clear()
+        self._refresh_transcribe()
+        return []
+
+    def choose_outdir(self):
+        try:
+            result = self.window.create_file_dialog(webview.FileDialog.FOLDER)
+        except Exception as exc:
+            self._log(f"✗ Couldn't open folder picker: {exc}")
+            return self.outdir
+        if result:
+            self.outdir = result[0]
+            self._save_config()
+        return self.outdir
+
+    def open_output_folder(self):
+        subprocess.run(["open", self.outdir])
+
+    def _refresh_transcribe(self):
+        n = len(self._file_queue)
+        ready = self.mlx_installed and n > 0 and not self.is_running
+        if self.is_running:
+            label = "Transcribing…"
+        elif n == 1:
+            label = "Transcribe 1 File"
+        elif n > 1:
+            label = f"Transcribe {n} Files"
         else:
-            self._check_install()
+            label = "Transcribe"
+        self._js("setTranscribe", {"enabled": ready, "label": label})
+
+    # ── Install check / install ───────────────────────────────────────────────
+
+    def _check_install(self):
+        r = subprocess.run([sys.executable, "-m", "pip", "show", "mlx-whisper"],
+                           capture_output=True)
+        self.mlx_installed = r.returncode == 0
+        if self.mlx_installed:
+            self._js("setInstallDone")
+            self._status("Ready.")
+        else:
+            self._status("mlx-whisper not installed — click Install Now.")
+        self._refresh_transcribe()
+
+    def install_mlx(self):
+        self._status("Installing mlx-whisper — this may take a minute…")
+
+        def _do():
+            self._log("→ pip install mlx-whisper")
+            r = subprocess.run([sys.executable, "-m", "pip", "install", "mlx-whisper"],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                self.mlx_installed = True
+                self._js("setInstallDone")
+                self._log("✓ Installed successfully.")
+                self._status("Ready.")
+            else:
+                self._log("✗ Failed:\n" + r.stderr[:500])
+                self._status("Installation failed — see log.")
+                self._js("setInstallRetry")
+            self._refresh_transcribe()
+        threading.Thread(target=_do, daemon=True).start()
 
     # ── HF model cache ────────────────────────────────────────────────────────
 
@@ -379,28 +644,24 @@ class WhisperApp:
         return os.path.expanduser("~/.cache/huggingface/hub")
 
     def _model_is_cached(self, repo):
-        folder = "models--" + repo.replace("/", "--")
-        snaps = os.path.join(self._hf_cache_dir(), folder, "snapshots")
+        snaps = os.path.join(self._hf_cache_dir(),
+                             "models--" + repo.replace("/", "--"), "snapshots")
         if not os.path.isdir(snaps):
             return False
         for snap in os.listdir(snaps):
             sd = os.path.join(snaps, snap)
             if os.path.isdir(sd):
-                for _root, _dirs, files in os.walk(sd):
+                for _r, _d, files in os.walk(sd):
                     if files:
                         return True
         return False
 
-    def _refresh_download_btn(self, *_):
-        if self._downloading:
-            return
-        repo = self._current_model()[1]
-        if self._model_is_cached(repo):
-            self.download_btn.config(state="disabled", text="Downloaded ✓")
-        else:
-            self.download_btn.config(state="normal", text="Download")
-
-    # ── Cleanup dialog ────────────────────────────────────────────────────────
+    def _model_dirs(self):
+        cache = self._hf_cache_dir()
+        if not os.path.isdir(cache):
+            return []
+        return [os.path.join(cache, nm) for nm in os.listdir(cache)
+                if nm.startswith("models--mlx-community--whisper")]
 
     @staticmethod
     def _human_size(n):
@@ -410,13 +671,6 @@ class WhisperApp:
                 return f"{n:.0f} {unit}"
             n /= 1024
         return f"{n:.1f} GB"
-
-    def _model_dirs(self):
-        cache = self._hf_cache_dir()
-        if not os.path.isdir(cache):
-            return []
-        return [os.path.join(cache, nm) for nm in os.listdir(cache)
-                if nm.startswith("models--mlx-community--whisper")]
 
     def _disk_usage_models(self):
         total = 0
@@ -431,44 +685,11 @@ class WhisperApp:
                         pass
         return total
 
-    def _open_cleanup_dialog(self):
-        size_h = self._human_size(self._disk_usage_models())
-        n_models = len(self._model_dirs())
+    def cleanup_info(self):
+        return {"count": len(self._model_dirs()),
+                "size": self._human_size(self._disk_usage_models())}
 
-        win = tk.Toplevel(self.root)
-        win.title("Clean Up")
-        win.configure(bg=BG)
-        win.resizable(False, False)
-        win.transient(self.root)
-        win.grab_set()
-
-        frm = ttk.Frame(win, padding=22)
-        frm.pack(fill="both", expand=True)
-
-        ttk.Label(frm, text="Clean up Whisper Transcriber",
-                  style="Title.TLabel").pack(anchor="w", pady=(0, 6))
-        ttk.Label(frm,
-                  text=f"{n_models} model(s) downloaded — about {size_h} on disk.",
-                  style="Muted.TLabel").pack(anchor="w", pady=(0, 14))
-
-        ttk.Button(frm, text=f"Delete downloaded models  ({size_h})",
-                   command=lambda: (win.destroy(), self._delete_models())
-                   ).pack(fill="x", pady=(0, 2))
-        ttk.Label(frm, text="Removes the AI models only. They re-download on next use.",
-                  style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
-
-        if not FROZEN:
-            ttk.Button(frm, text="Uninstall everything (models + packages)",
-                       command=lambda: (win.destroy(), self._full_uninstall())
-                       ).pack(fill="x", pady=(0, 2))
-            ttk.Label(frm,
-                      text="Removes models and all Python packages, then quits.\n"
-                           "Double-click setup again to reinstall.",
-                      style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
-
-        ttk.Button(frm, text="Cancel", command=win.destroy).pack()
-
-    def _delete_models(self):
+    def delete_models(self):
         def _do():
             removed = 0
             for d in self._model_dirs():
@@ -479,16 +700,10 @@ class WhisperApp:
                     self._log(f"(could not remove {os.path.basename(d)}: {e})")
             self._log(f"✓ Deleted {removed} model(s) from cache.")
             self._status("Models deleted — they'll re-download when next used.")
-            self.root.after(0, self._refresh_download_btn)
+            self.set_model(self.model_index)  # refresh download button
         threading.Thread(target=_do, daemon=True).start()
 
-    def _full_uninstall(self):
-        if not messagebox.askyesno(
-                "Uninstall everything",
-                "This removes ALL downloaded models and the Python packages, "
-                "then quits the app.\n\n"
-                "You'll need to run setup again to use it. Continue?"):
-            return
+    def uninstall_everything(self):
         for d in self._model_dirs():
             shutil.rmtree(d, ignore_errors=True)
         try:
@@ -501,261 +716,60 @@ class WhisperApp:
                              start_new_session=True)
         except Exception:
             pass
-        self.root.destroy()
+        os._exit(0)
 
-    # ── Setup / repair (non-bundled only) ─────────────────────────────────────
+    # ── Setup / repair ────────────────────────────────────────────────────────
 
-    def _setup_script_path(self):
-        try:
-            here = os.path.dirname(os.path.abspath(__file__))
-        except NameError:
-            here = os.path.expanduser("~/Whisper")
-        for cand in (os.path.join(here, "setup.command"),
-                     os.path.expanduser("~/Whisper/setup.command")):
+    def run_setup(self):
+        here = os.path.expanduser("~/Whisper")
+        for cand in (os.path.join(here, "setup.command"),):
             if os.path.exists(cand):
-                return cand
-        return None
+                subprocess.run(["open", cand])
+                self._log(f"→ Launched setup: {cand}")
+                self._status("Setup opened in Terminal — follow the prompts there.")
+                return
+        self._log("✗ setup.command not found (expected in ~/Whisper).")
 
-    def _run_setup(self):
-        path = self._setup_script_path()
-        if not path:
-            self._log("✗ setup.command not found (expected in ~/Whisper).")
-            self._status("setup.command not found.")
+    # ── Model download ────────────────────────────────────────────────────────
+
+    def download_model(self):
+        if not self.mlx_installed:
+            self._log("✗ Install mlx-whisper first (click Install Now).")
             return
-        try:
-            subprocess.run(["open", path])
-            self._log(f"→ Launched setup: {path}")
-            self._status("Setup opened in Terminal — follow the prompts there.")
-        except Exception as e:
-            self._log(f"✗ Could not launch setup: {e}")
+        label, repo = self._current_model()
+        self._downloading = True
+        self._js("setDownloadBtn", {"enabled": False, "text": "Downloading…"})
+        self._status(f"Downloading {label.split('—')[0].strip()} model…")
+        self._log(f"\n→ Downloading model: {repo}")
+        self._log("  (cached after first download; large models take a while)")
 
-    # ── Persistence ───────────────────────────────────────────────────────────
-
-    def _load_config(self):
-        try:
-            with open(CONFIG_PATH) as f:
-                return json.load(f)
-        except Exception:
-            return {}
-
-    def _save_config(self, *_):
-        data = {
-            "model":   self.model_combo.current(),
-            "format":  self.out_format.get(),
-            "outdir":  self.outdir.get(),
-            "cleanup": self.cleanup.get(),
-        }
-        try:
-            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-            with open(CONFIG_PATH, "w") as f:
-                json.dump(data, f)
-        except Exception:
-            pass
-
-    def _apply_saved_model(self):
-        idx = self._cfg.get("model", DEFAULT_MODEL_INDEX)
-        if not isinstance(idx, int) or not (0 <= idx < len(MODELS)):
-            idx = DEFAULT_MODEL_INDEX
-        self.model_combo.current(idx)
-
-    def _wire_persistence(self):
-        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_change)
-        self.out_format.trace_add("write", self._save_config)
-        self.outdir.trace_add("write", self._save_config)
-        self.cleanup.trace_add("write", self._save_config)
-
-    def _on_model_change(self, *_):
-        self._save_config()
-        self._refresh_download_btn()
-
-    # ── Theme ─────────────────────────────────────────────────────────────────
-
-    def _setup_theme(self):
-        style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure(".", background=BG, foreground=TEXT,
-                        fieldbackground="white", font=("Helvetica", 12))
-        style.configure("TFrame",       background=BG)
-        style.configure("TLabel",       background=BG, foreground=TEXT)
-        style.configure("Title.TLabel", font=("Helvetica", 18, "bold"))
-        style.configure("Sub.TLabel",   font=("Helvetica", 10), foreground=MUTED)
-        style.configure("Muted.TLabel", font=("Helvetica", 11), foreground=MUTED)
-        style.configure("Warn.TLabel",  font=("Helvetica", 11), foreground="#9a6700")
-        style.configure("TButton",      font=("Helvetica", 12), padding=4)
-        style.configure("Go.TButton",   font=("Helvetica", 13, "bold"), padding=6)
-        style.configure("TRadiobutton", background=BG, foreground=TEXT,
-                        font=("Helvetica", 11))
-        style.map("TRadiobutton", background=[("active", BG)])
-        style.configure("TCombobox",    padding=3)
-
-    # ── Build UI ──────────────────────────────────────────────────────────────
-
-    def _build(self):
-        main = ttk.Frame(self.root, padding=(28, 18))
-        main.pack(fill="both", expand=True)
-
-        ttk.Label(main, text="Whisper Transcriber",
-                  style="Title.TLabel").pack(pady=(0, 2))
-        ttk.Label(main, text="Local transcription • runs entirely on your Mac",
-                  style="Sub.TLabel").pack(pady=(0, 12))
-
-        self.install_frame = ttk.Frame(main)
-        ttk.Label(self.install_frame, text="⚠  mlx-whisper is not installed.",
-                  style="Warn.TLabel").pack(side="left", padx=(0, 8))
-        self.install_btn = ttk.Button(self.install_frame, text="Install Now",
-                                      command=self._install)
-        self.install_btn.pack(side="left")
-
-        grid = ttk.Frame(main)
-        grid.pack(fill="x", pady=(4, 4))
-        grid.columnconfigure(1, weight=1)
-
-        def add_label(text, row):
-            ttk.Label(grid, text=text).grid(
-                row=row, column=0, sticky="nw", pady=9)
-
-        # Row 0 — Model
-        add_label("Model", 0)
-        self.model_combo = ttk.Combobox(grid, values=[m[0] for m in MODELS],
-                                        state="readonly", width=34)
-        self.model_combo.current(0)
-        self.model_combo.grid(row=0, column=1, sticky="w", padx=(12, 0))
-        self.download_btn = ttk.Button(grid, text="Download",
-                                       command=self._download_model)
-        self.download_btn.grid(row=0, column=2, padx=(8, 0))
-
-        # Row 1 — File queue
-        add_label("Files", 1)
-
-        queue_cell = ttk.Frame(grid)
-        queue_cell.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=6)
-
-        self.file_listbox = tk.Listbox(
-            queue_cell, height=4, font=("Monaco", 10),
-            selectmode=tk.EXTENDED, activestyle="none",
-            bg="white", fg=TEXT,
-            selectbackground=ACCENT, selectforeground="white",
-            relief="flat", borderwidth=0,
-            highlightthickness=1,
-            highlightcolor="#b0b0b0", highlightbackground="#d0d0d0",
-        )
-        sb = ttk.Scrollbar(queue_cell, orient="vertical",
-                           command=self.file_listbox.yview)
-        self.file_listbox.configure(yscrollcommand=sb.set)
-        self.file_listbox.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        self.file_listbox.bind("<Delete>",    lambda _: self._remove_selected())
-        self.file_listbox.bind("<BackSpace>", lambda _: self._remove_selected())
-
-        queue_btns = ttk.Frame(grid)
-        queue_btns.grid(row=1, column=2, sticky="n", padx=(8, 0), pady=6)
-        ttk.Button(queue_btns, text="Add Files…",
-                   command=self._add_files).pack(fill="x", pady=(0, 4))
-        ttk.Button(queue_btns, text="Remove",
-                   command=self._remove_selected).pack(fill="x", pady=(0, 4))
-        ttk.Button(queue_btns, text="Clear All",
-                   command=self._clear_files).pack(fill="x")
-
-        # Row 2 — Output directory
-        add_label("Save to", 2)
-        ttk.Label(grid, textvariable=self.outdir, style="Muted.TLabel"
-                  ).grid(row=2, column=1, sticky="w", padx=(12, 0))
-        ttk.Button(grid, text="Choose…", command=self._pick_outdir
-                   ).grid(row=2, column=2, padx=(8, 0))
-
-        # Row 3 — Output format (6 options; padx=4 keeps them within the column)
-        add_label("Format", 3)
-        fmt_row = ttk.Frame(grid)
-        fmt_row.grid(row=3, column=1, columnspan=2, sticky="w",
-                     padx=(12, 0), pady=6)
-        for fmt in OUTPUT_FORMATS:
-            ttk.Radiobutton(fmt_row, text=fmt.upper(), variable=self.out_format,
-                            value=fmt).pack(side="left", padx=4)
-
-        # Row 4 — Text cleanup
-        add_label("Cleanup", 4)
-        ttk.Checkbutton(grid,
-                        text="Merge segment breaks into flowing paragraphs",
-                        variable=self.cleanup
-                        ).grid(row=4, column=1, columnspan=2, sticky="w",
-                               padx=(12, 0), pady=6)
-
-        # Transcribe + Live buttons on the same row
-        btn_row = ttk.Frame(main)
-        btn_row.pack(pady=14)
-
-        self.transcribe_btn = ttk.Button(btn_row, text="Transcribe",
-                                         command=self._transcribe,
-                                         style="Go.TButton", state="disabled")
-        self.transcribe_btn.pack(side="left", padx=(0, 10))
-
-        ttk.Button(btn_row, text="Live Transcribe…",
-                   command=self._open_live_window).pack(side="left")
-
-        ttk.Label(main, text="Progress",
-                  font=("Helvetica", 10, "bold")).pack(anchor="w")
-        self.log = tk.Text(main, height=7, font=("Monaco", 10),
-                           bg=LOG_BG, fg=LOG_FG, relief="flat",
-                           state="disabled", highlightthickness=0)
-        self.log.pack(fill="x", pady=(2, 8))
-
-        bottom = ttk.Frame(main)
-        bottom.pack(fill="x", pady=(2, 0))
-        self.status_var = tk.StringVar(
-            value="Ready." if FROZEN else "Checking for mlx-whisper…")
-        ttk.Label(bottom, textvariable=self.status_var,
-                  style="Muted.TLabel").pack(side="left")
-        ttk.Button(bottom, text="Clean up…",
-                   command=self._open_cleanup_dialog).pack(side="right")
-        if not FROZEN:
-            ttk.Button(bottom, text="Setup / Repair…",
-                       command=self._run_setup).pack(side="right", padx=(0, 8))
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
-    def _log(self, msg):
         def _do():
-            self.log.config(state="normal")
-            self.log.insert("end", msg + "\n")
-            self.log.see("end")
-            self.log.config(state="disabled")
-        self.root.after(0, _do)
+            code = ("from huggingface_hub import snapshot_download;"
+                    f"snapshot_download(repo_id='{repo}')")
+            proc = subprocess.Popen([sys.executable, "-c", code],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                if line.strip():
+                    self._log(line.rstrip())
+            proc.wait()
+            self._downloading = False
+            if proc.returncode == 0:
+                self._log("✓ Model ready.")
+                self._status("Model downloaded and ready.")
+                self._js("setDownloadBtn", {"enabled": False, "text": "Downloaded ✓"})
+            else:
+                self._log("✗ Model download failed — see log above.")
+                self._status("Model download failed.")
+                self._js("setDownloadBtn", {"enabled": True, "text": "Download"})
+        threading.Thread(target=_do, daemon=True).start()
 
-    def _status(self, msg):
-        self.root.after(0, self.status_var.set, msg)
-
-    def _refresh(self):
-        n = len(self._file_queue)
-        ready = self.mlx_installed and n > 0 and not self.is_running
-        if self.is_running:
-            label = "Transcribing…"
-        elif n == 1:
-            label = "Transcribe 1 File"
-        elif n > 1:
-            label = f"Transcribe {n} Files"
-        else:
-            label = "Transcribe"
-        self.root.after(0, lambda: self.transcribe_btn.config(
-            state="normal" if ready else "disabled", text=label))
-
-    def _current_model(self):
-        return MODELS[self.model_combo.current()]
-
-    def _highlight_queue_row(self, idx: int):
-        self.file_listbox.selection_clear(0, tk.END)
-        self.file_listbox.selection_set(idx)
-        self.file_listbox.see(idx)
-
-    # ── Text cleanup ──────────────────────────────────────────────────────────
+    # ── Text helpers ──────────────────────────────────────────────────────────
 
     @staticmethod
     def _reflow_text(text):
         lines = [ln.strip() for ln in text.splitlines()]
-        joined = " ".join(ln for ln in lines if ln)
-        joined = re.sub(r"\s+", " ", joined).strip()
+        joined = re.sub(r"\s+", " ", " ".join(ln for ln in lines if ln)).strip()
         if not joined:
             return text
         sentences = re.split(r"(?<=[.!?])\s+", joined)
@@ -769,29 +783,9 @@ class WhisperApp:
             paras.append(" ".join(cur))
         return "\n\n".join(paras) + "\n"
 
-    # ── Subtitle time formatters ───────────────────────────────────────────────
-
-    @staticmethod
-    def _srt_time(sec: float) -> str:
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        ms = int(round((sec % 1) * 1000))
-        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-    @staticmethod
-    def _vtt_time(sec: float) -> str:
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        ms = int(round((sec % 1) * 1000))
-        return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-
-    # ── PDF / DOCX writers (shared by batch and live modes) ───────────────────
-
-    def _write_pdf(self, text: str, base: str, outdir: str) -> bool:
+    def _write_pdf(self, text, base, outdir):
         try:
-            from fpdf import FPDF  # noqa: PLC0415
+            from fpdf import FPDF
         except ImportError:
             self._log("✗ fpdf2 not installed. Run Setup / Repair… to install it.")
             return False
@@ -800,252 +794,58 @@ class WhisperApp:
             pdf.set_auto_page_break(auto=True, margin=20)
             pdf.add_page()
             pdf.set_margins(20, 20, 20)
-
             pdf.set_font("Helvetica", "B", 14)
             pdf.cell(0, 10, base, new_x="LMARGIN", new_y="NEXT")
             pdf.ln(4)
-
             pdf.set_font("Helvetica", size=11)
             for para in text.split("\n\n"):
-                para = para.strip()
-                if para:
-                    pdf.multi_cell(0, 6, para)
+                if para.strip():
+                    pdf.multi_cell(0, 6, para.strip())
                     pdf.ln(3)
-
             pdf.output(os.path.join(outdir, base + ".pdf"))
             return True
         except Exception as exc:
             self._log(f"✗ PDF error: {exc}")
             return False
 
-    def _write_docx(self, text: str, base: str, outdir: str) -> bool:
+    def _write_docx(self, text, base, outdir):
         try:
-            from docx import Document           # noqa: PLC0415
-            from docx.shared import Inches, Pt  # noqa: PLC0415
+            from docx import Document
+            from docx.shared import Inches, Pt
         except ImportError:
             self._log("✗ python-docx not installed. Run Setup / Repair… to install it.")
             return False
         try:
             doc = Document()
             for section in doc.sections:
-                section.top_margin    = Inches(1)
+                section.top_margin = Inches(1)
                 section.bottom_margin = Inches(1)
-                section.left_margin   = Inches(1.25)
-                section.right_margin  = Inches(1.25)
-
+                section.left_margin = Inches(1.25)
+                section.right_margin = Inches(1.25)
             doc.add_heading(base, level=0)
-
             for para in text.split("\n\n"):
-                para = para.strip()
-                if para:
-                    p = doc.add_paragraph(para)
+                if para.strip():
+                    p = doc.add_paragraph(para.strip())
                     for run in p.runs:
                         run.font.size = Pt(11)
-
             doc.save(os.path.join(outdir, base + ".docx"))
             return True
         except Exception as exc:
             self._log(f"✗ DOCX error: {exc}")
             return False
 
-    # ── File queue ────────────────────────────────────────────────────────────
-
-    def _add_files(self):
-        paths = filedialog.askopenfilenames(
-            title="Select audio or video files",
-            filetypes=[("Audio / Video",
-                        "*.mp3 *.mp4 *.m4a *.wav *.flac *.aac *.ogg *.mkv *.webm"),
-                       ("All files", "*.*")])
-        for p in paths:
-            if p not in self._file_queue:
-                self._file_queue.append(p)
-                self.file_listbox.insert(tk.END, os.path.basename(p))
-        self._refresh()
-
-    def _remove_selected(self):
-        for i in reversed(self.file_listbox.curselection()):
-            self.file_listbox.delete(i)
-            del self._file_queue[i]
-        self._refresh()
-
-    def _clear_files(self):
-        self._file_queue.clear()
-        self.file_listbox.delete(0, tk.END)
-        self._refresh()
-
-    def _pick_outdir(self):
-        path = filedialog.askdirectory(title="Choose where to save transcripts")
-        if path:
-            self.outdir.set(path)
-
-    # ── Live transcription launcher ───────────────────────────────────────────
-
-    def _open_live_window(self):
-        LiveTranscribeWindow(self.root, self)
-
-    # ── ffmpeg / environment ──────────────────────────────────────────────────
+    # ── ffmpeg / mlx CLI env ──────────────────────────────────────────────────
 
     def _build_env(self):
         env = os.environ.copy()
         extra = ["/opt/homebrew/bin", "/usr/local/bin"]
-        if FROZEN:
-            resource_path = os.environ.get("RESOURCEPATH", "")
-            extra.insert(0, os.path.join(resource_path, "bin"))
+        bundle_resources = os.environ.get("WHISPER_BUNDLE_RESOURCES")
+        if bundle_resources:
+            extra.insert(0, os.path.join(bundle_resources, "bin"))
         env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
         return env
 
-    # ── Install check (non-bundled only) ──────────────────────────────────────
-
-    def _check_install(self):
-        def _check():
-            r = subprocess.run([sys.executable, "-m", "pip", "show", "mlx-whisper"],
-                               capture_output=True)
-            self.mlx_installed = r.returncode == 0
-            if self.mlx_installed:
-                self._status("Ready.")
-            else:
-                self.root.after(0, lambda: self.install_frame.pack(pady=(0, 8)))
-                self._status("mlx-whisper not installed — click Install Now.")
-            self._refresh()
-        threading.Thread(target=_check, daemon=True).start()
-
-    def _install(self):
-        self.root.after(0, lambda: self.install_btn.config(
-            state="disabled", text="Installing…"))
-        self._status("Installing mlx-whisper — this may take a minute…")
-
-        def _do():
-            self._log("→ pip install mlx-whisper")
-            r = subprocess.run([sys.executable, "-m", "pip", "install", "mlx-whisper"],
-                               capture_output=True, text=True)
-            if r.returncode == 0:
-                self.mlx_installed = True
-                self.root.after(0, self.install_frame.pack_forget)
-                self._log("✓ Installed successfully.")
-                self._status("Ready.")
-            else:
-                self._log("✗ Failed:\n" + r.stderr[:500])
-                self._status("Installation failed — see log.")
-                self.root.after(0, lambda: self.install_btn.config(
-                    state="normal", text="Retry"))
-            self._refresh()
-        threading.Thread(target=_do, daemon=True).start()
-
-    # ── Model download ────────────────────────────────────────────────────────
-
-    def _download_model(self):
-        if not self.mlx_installed:
-            self._log("✗ Install mlx-whisper first (click Install Now).")
-            return
-
-        label, repo = self._current_model()
-        self._downloading = True
-        self.root.after(0, lambda: self.download_btn.config(
-            state="disabled", text="Downloading…"))
-        self._status(f"Downloading {label.split('—')[0].strip()} model…")
-        self._log(f"\n→ Downloading model: {repo}")
-        self._log("  (cached after first download; large models take a while)")
-
-        def _do():
-            if FROZEN:
-                try:
-                    from huggingface_hub import snapshot_download  # noqa: PLC0415
-                    buf = io.StringIO()
-                    with contextlib.redirect_stdout(buf):
-                        snapshot_download(repo_id=repo)
-                    for line in buf.getvalue().splitlines():
-                        if line.strip():
-                            self._log(line)
-                    ok = True
-                except Exception as exc:
-                    self._log(f"✗ {exc}")
-                    ok = False
-            else:
-                code = ("from huggingface_hub import snapshot_download;"
-                        f"snapshot_download(repo_id='{repo}')")
-                proc = subprocess.Popen([sys.executable, "-c", code],
-                                        stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True)
-                for line in proc.stdout:
-                    if line.strip():
-                        self._log(line.rstrip())
-                proc.wait()
-                ok = proc.returncode == 0
-
-            self._downloading = False
-            if ok:
-                self._log("✓ Model ready.")
-                self._status("Model downloaded and ready.")
-            else:
-                self._log("✗ Model download failed — see log above.")
-                self._status("Model download failed.")
-            self.root.after(0, self._refresh_download_btn)
-
-        threading.Thread(target=_do, daemon=True).start()
-
-    # ── Transcription — API path (py2app bundle) ──────────────────────────────
-
-    def _transcribe_via_api(self, file_path: str, model: str,
-                            outdir: str, fmt: str) -> bool:
-        try:
-            import mlx_whisper  # noqa: PLC0415
-        except ImportError as exc:
-            self._log(f"✗ mlx_whisper import failed: {exc}")
-            return False
-
-        self._log("  Transcribing…")
-        try:
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                result = mlx_whisper.transcribe(
-                    file_path, path_or_hf_repo=model, verbose=True)
-            for line in buf.getvalue().splitlines():
-                if line.strip():
-                    self._log(line)
-        except Exception as exc:
-            self._log(f"✗ {exc}")
-            return False
-
-        base     = os.path.splitext(os.path.basename(file_path))[0]
-        text     = (result.get("text") or "").strip()
-        segments = result.get("segments") or []
-
-        if fmt == "txt":
-            content = self._reflow_text(text) if self.cleanup.get() else text + "\n"
-            with open(os.path.join(outdir, base + ".txt"), "w", encoding="utf-8") as f:
-                f.write(content)
-            if self.cleanup.get():
-                self._log("✓ Cleaned up line breaks in transcript.")
-
-        if fmt == "srt":
-            with open(os.path.join(outdir, base + ".srt"), "w", encoding="utf-8") as f:
-                for i, seg in enumerate(segments, 1):
-                    f.write(f"{i}\n"
-                            f"{self._srt_time(seg['start'])} --> "
-                            f"{self._srt_time(seg['end'])}\n"
-                            f"{seg['text'].strip()}\n\n")
-
-        if fmt == "vtt":
-            with open(os.path.join(outdir, base + ".vtt"), "w", encoding="utf-8") as f:
-                f.write("WEBVTT\n\n")
-                for seg in segments:
-                    f.write(f"{self._vtt_time(seg['start'])} --> "
-                            f"{self._vtt_time(seg['end'])}\n"
-                            f"{seg['text'].strip()}\n\n")
-
-        display_text = self._reflow_text(text) if self.cleanup.get() else text
-
-        if fmt == "pdf":
-            self._write_pdf(display_text, base, outdir)
-
-        if fmt == "docx":
-            self._write_docx(display_text, base, outdir)
-
-        return True
-
-    # ── Transcription — CLI path (venv / dev) ─────────────────────────────────
-
-    def _find_mlx_exe(self) -> str | None:
+    def _find_mlx_exe(self):
         venv_bin = os.path.dirname(sys.executable)
         for cand in (os.path.join(venv_bin, "mlx_whisper"),
                      shutil.which("mlx_whisper"),
@@ -1054,98 +854,84 @@ class WhisperApp:
                 return cand
         return None
 
-    def _cleanup_txt_output(self, file_path: str, outdir: str):
-        base = os.path.splitext(os.path.basename(file_path))[0]
-        txt_path = os.path.join(outdir, base + ".txt")
-        if not os.path.exists(txt_path):
-            return
-        try:
-            with open(txt_path, "r", encoding="utf-8") as f:
-                original = f.read()
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write(self._reflow_text(original))
-            self._log("✓ Cleaned up line breaks in transcript.")
-        except Exception as e:
-            self._log(f"(Could not clean up text: {e})")
-
-    def _transcribe_via_cli(self, file_path: str, model: str,
-                            outdir: str, fmt: str,
-                            mlx_exe: str, env: dict) -> bool:
-        # PDF/DOCX need text content; map them to CLI's "txt" then post-process.
-        if fmt in ("pdf", "docx"):
-            cli_fmt, remove_txt = "txt", True
-        else:
-            cli_fmt, remove_txt = fmt, False
-
+    def _run_mlx_cli(self, mlx_exe, file_path, model, out_dir, cli_fmt, env):
         cmd = [mlx_exe, file_path, "--model", model,
-               "--output-dir", outdir, "--output-format", cli_fmt]
+               "--output-dir", out_dir, "--output-format", cli_fmt]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, env=env)
         for line in proc.stdout:
             self._log(line.rstrip())
         proc.wait()
+        return proc.returncode == 0
 
-        if proc.returncode != 0:
-            return False
-
+    def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env):
         base = os.path.splitext(os.path.basename(file_path))[0]
 
-        if self.cleanup.get() and cli_fmt == "txt":
-            self._cleanup_txt_output(file_path, outdir)
+        if fmt in ("pdf", "docx"):
+            # mlx_whisper always names its text output "<base>.txt" — if we
+            # asked it to write that straight into outdir, it would collide
+            # with (silently overwrite, then delete) any real standalone
+            # .txt output already sitting there for this file. Generate the
+            # intermediate text in an isolated scratch dir instead, so it
+            # can never touch a real file in the user's chosen folder.
+            with tempfile.TemporaryDirectory() as tmpdir:
+                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, "txt", env):
+                    return False
+                tmp_txt = os.path.join(tmpdir, base + ".txt")
+                if not os.path.exists(tmp_txt):
+                    return False
+                with open(tmp_txt, encoding="utf-8") as f:
+                    text = f.read()
+            if self.cleanup:
+                text = self._reflow_text(text)
+                self._log("✓ Cleaned up line breaks in transcript.")
+            return (self._write_pdf(text, base, outdir) if fmt == "pdf"
+                    else self._write_docx(text, base, outdir))
 
-        # Build PDF / DOCX from the .txt the CLI wrote
-        txt_path = os.path.join(outdir, base + ".txt")
-        if fmt in ("pdf", "docx") and os.path.exists(txt_path):
-            with open(txt_path, "r", encoding="utf-8") as f:
-                text = f.read()
-            if fmt == "pdf":
-                self._write_pdf(text, base, outdir)
-            if fmt == "docx":
-                self._write_docx(text, base, outdir)
-            if remove_txt:
+        # txt / srt / vtt: mlx_whisper writes directly into outdir.
+        if not self._run_mlx_cli(mlx_exe, file_path, model, outdir, fmt, env):
+            return False
+        if self.cleanup and fmt == "txt":
+            txt_path = os.path.join(outdir, base + ".txt")
+            if os.path.exists(txt_path):
                 try:
-                    os.remove(txt_path)
-                except OSError:
-                    pass
-
+                    with open(txt_path, encoding="utf-8") as f:
+                        original = f.read()
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(self._reflow_text(original))
+                    self._log("✓ Cleaned up line breaks in transcript.")
+                except Exception as e:
+                    self._log(f"(Could not clean up text: {e})")
         return True
 
-    # ── Batch transcription entry point ───────────────────────────────────────
+    # ── Batch transcription ───────────────────────────────────────────────────
 
-    def _transcribe(self):
-        if not self._file_queue:
+    def transcribe(self):
+        if not self._file_queue or self.is_running:
             return
-
         _, model = self._current_model()
-        outdir   = self.outdir.get()
-        fmt      = self.out_format.get()
-        files    = list(self._file_queue)
-        n        = len(files)
-
+        outdir, fmt = self.outdir, self.out_format
+        files = list(self._file_queue)
+        n = len(files)
         self.is_running = True
-        self._refresh()
+        self._refresh_transcribe()
         self._status(f"Transcribing {n} file{'s' if n > 1 else ''}… please wait.")
-
-        env     = self._build_env()
-        mlx_exe = None if FROZEN else self._find_mlx_exe()
+        env = self._build_env()
+        mlx_exe = self._find_mlx_exe()
 
         def _do():
             if not shutil.which("ffmpeg", path=env["PATH"]):
                 self.is_running = False
                 self._log("✗ ffmpeg not found.")
-                self._log("  Bundled ffmpeg is missing — reinstall the app."
-                          if FROZEN else
-                          "  Install it with:  brew install ffmpeg")
+                self._log("  DMG install: reinstall the app. Source: brew install ffmpeg")
                 self._status("ffmpeg required — see log.")
-                self._refresh()
+                self._refresh_transcribe()
                 return
-
-            if not FROZEN and mlx_exe is None:
+            if mlx_exe is None:
                 self.is_running = False
-                self._log("✗ mlx_whisper binary not found.")
-                self._log("  Run Setup / Repair… to fix the installation.")
+                self._log("✗ mlx_whisper binary not found. Run Setup / Repair…")
                 self._status("mlx_whisper not found — run Setup / Repair.")
-                self._refresh()
+                self._refresh_transcribe()
                 return
 
             failed = []
@@ -1155,14 +941,7 @@ class WhisperApp:
                 self._log(f"  Model : {model}")
                 self._log(f"  Format: {fmt}  →  {outdir}")
                 self._status(f"[{i}/{n}] Transcribing {name}…")
-                self.root.after(0, lambda idx=i - 1: self._highlight_queue_row(idx))
-
-                if FROZEN:
-                    ok = self._transcribe_via_api(file_path, model, outdir, fmt)
-                else:
-                    ok = self._transcribe_via_cli(
-                        file_path, model, outdir, fmt, mlx_exe, env)
-
+                ok = self._transcribe_via_cli(file_path, model, outdir, fmt, mlx_exe, env)
                 if ok:
                     self._log(f"✓ Saved to: {outdir}")
                 else:
@@ -1171,25 +950,159 @@ class WhisperApp:
 
             self.is_running = False
             done = n - len(failed)
-
             if not failed:
-                self._log(f"\n✓ All {n} file{'s' if n > 1 else ''} "
-                          f"transcribed successfully.")
-                self._status(
-                    f"Done — {n} transcript{'s' if n > 1 else ''} saved to {outdir}")
+                self._log(f"\n✓ All {n} file{'s' if n > 1 else ''} transcribed successfully.")
+                self._status(f"Done — {n} transcript{'s' if n > 1 else ''} saved to {outdir}")
                 subprocess.run(["open", outdir])
             else:
-                self._log(f"\n⚠  {done}/{n} succeeded. "
-                          f"Failed: {', '.join(failed)}")
+                self._log(f"\n⚠  {done}/{n} succeeded. Failed: {', '.join(failed)}")
                 self._status(f"{done}/{n} transcribed. {len(failed)} failed — see log.")
-
-            self.root.after(0, self._refresh_download_btn)
-            self._refresh()
-
+            self.set_model(self.model_index)
+            self._refresh_transcribe()
         threading.Thread(target=_do, daemon=True).start()
+
+    # ── Live transcription ────────────────────────────────────────────────────
+
+    CHUNK_SECS = 10
+    SAMPLE_RATE = 16000
+
+    def live_start(self, fmt):
+        missing = []
+        for mod in ("sounddevice", "mlx_whisper"):
+            try:
+                __import__(mod)
+            except ImportError:
+                missing.append(mod)
+        if missing:
+            self._js("liveStatus",
+                     "Missing: " + " ".join(missing) + " — run Setup / Repair.")
+            return
+        self._live_fmt = fmt if fmt in LIVE_OUTPUT_FORMATS else "txt"
+        self._live_recording = True
+        self._live_stop.clear()
+        self._js("setRecording", True)
+        self._js("setLiveSave", False)
+        self._js("liveStatus",
+                 '<span class="rec-dot"></span>Recording… (first transcript in ~10 s)')
+        threading.Thread(target=self._record_loop, daemon=True).start()
+
+    def live_stop(self):
+        self._live_recording = False
+        self._live_stop.set()
+        self._js("setRecording", False)
+        self._js("liveStatus", "Finishing last chunk…")
+
+    def live_clear(self):
+        self._live_transcript = ""
+
+    def _record_loop(self):
+        import sounddevice as sd
+        import numpy as np
+        import time
+        buffer, last = [], time.monotonic()
+
+        def cb(indata, frames, tinfo, status):
+            buffer.append(indata[:, 0].copy())
+
+        try:
+            with sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1,
+                                dtype="float32", callback=cb):
+                while not self._live_stop.is_set():
+                    now = time.monotonic()
+                    if now - last >= self.CHUNK_SECS and buffer:
+                        chunk = np.concatenate(buffer)
+                        buffer.clear()
+                        last = now
+                        self._transcribe_chunk(chunk)
+                    time.sleep(0.1)
+                if buffer:
+                    self._transcribe_chunk(np.concatenate(buffer))
+        except Exception as exc:
+            self._js("liveStatus", f"Audio error: {exc}")
+
+        words = len(self._live_transcript.split()) if self._live_transcript else 0
+        self._js("liveStatus", f"Done — {words} word{'s' if words != 1 else ''} transcribed")
+        if self._live_transcript:
+            self._js("setLiveSave", True)
+
+    def _transcribe_chunk(self, audio):
+        import mlx_whisper
+        import numpy as np
+        if len(audio) < self.SAMPLE_RATE * 0.5:
+            return
+        # Whisper hallucinates repeated phrases — often literally looping
+        # the last thing actually said — when fed near-silent audio. This
+        # is a well-documented model failure mode, not a decoding bug.
+        # Most likely to hit the short trailing chunk after Stop, which is
+        # often mostly silence/pause. Gate on average amplitude before
+        # ever handing the chunk to the model.
+        if float(np.abs(audio).mean()) < 0.006:
+            return
+        try:
+            result = mlx_whisper.transcribe(
+                audio, path_or_hf_repo=self._current_model()[1], verbose=False)
+            text = (result.get("text") or "").strip()
+            if text:
+                sep = " " if self._live_transcript else ""
+                self._live_transcript += sep + text
+                self._js("setLiveText", self._live_transcript)
+        except Exception as exc:
+            self._js("liveStatus", f"Transcription error: {exc}")
+
+    def live_save(self, fmt):
+        text = self._live_transcript.strip()
+        if not text:
+            return
+        fmt = fmt if fmt in LIVE_OUTPUT_FORMATS else "txt"
+        base = "live_transcript_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        if fmt == "txt":
+            with open(os.path.join(self.outdir, base + ".txt"), "w", encoding="utf-8") as f:
+                f.write(text)
+        elif fmt == "pdf":
+            self._write_pdf(text, base, self.outdir)
+        elif fmt == "docx":
+            self._write_docx(text, base, self.outdir)
+        self._js("liveStatus", f"Saved: {base}.{fmt}")
+        subprocess.run(["open", self.outdir])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  macOS integration + entry point
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fix_macos_menu_bar_name():
+    """The app execs into a bare venv Python outside Contents/MacOS/, so macOS
+    can't trace the process back to Info.plist for the menu bar app name.
+    Override the in-memory bundle dict Cocoa reads when drawing the menu."""
+    try:
+        from Foundation import NSBundle
+        NSBundle.mainBundle().infoDictionary()["CFBundleName"] = "Whisper Transcriber"
+    except Exception:
+        pass
+
+
+def _force_light_appearance():
+    """Force light appearance so the native window chrome doesn't follow
+    system Dark Mode (the page's own CSS is light regardless)."""
+    try:
+        from AppKit import NSApplication, NSAppearance
+        NSApplication.sharedApplication().setAppearance_(
+            NSAppearance.appearanceNamed_("NSAppearanceNameAqua"))
+    except Exception:
+        pass
+
+
+def main():
+    api = Api()
+    _fix_macos_menu_bar_name()
+    _force_light_appearance()
+    window = webview.create_window(
+        "Whisper Transcriber", html=HTML, js_api=api,
+        width=700, height=880, min_size=(640, 720),
+        background_color="#f5f5f7")
+    api.window = window
+    webview.start()
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    WhisperApp(root)
-    root.mainloop()
+    main()

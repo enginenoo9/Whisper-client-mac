@@ -1,9 +1,19 @@
 # Third-Party Licenses
 
-Whisper Transcriber is distributed under the [MIT License](LICENSE). It does not
-bundle third-party code — its dependencies install at runtime into a local
-virtual environment (via `pip`) and via Homebrew (`ffmpeg`). Each remains under
-its own license, reproduced or referenced below.
+Whisper Transcriber is distributed under the [MIT License](LICENSE).
+
+Distribution depends on how you got the app:
+
+- **DMG builds** (via `build-dmg.sh`) bundle two third-party components
+  directly: **CPython + Tcl/Tk** (as `Python.framework`, downloaded from the
+  official python.org installer) and **ffmpeg** (a compiled binary, staged
+  from Homebrew at build time). Both ship as unmodified, separate executables
+  invoked via subprocess — not linked into this project's own code — and each
+  remains under its own license below.
+- All other dependencies (`mlx-whisper`, `fpdf2`, `python-docx`,
+  `sounddevice`, etc.) install at runtime into a private virtual environment
+  via `pip`, on first launch. Each remains under its own license, reproduced
+  or referenced below.
 
 | Component | Used for | License | Project |
 |---|---|---|---|
@@ -15,21 +25,37 @@ its own license, reproduced or referenced below.
 | `python-docx` | DOCX output | MIT | https://github.com/python-openxml/python-docx |
 | `sounddevice` | Microphone capture | MIT | https://github.com/spatialaudio/python-sounddevice |
 | PortAudio (via `sounddevice`) | Audio I/O backend | MIT-style | https://www.portaudio.com |
-| Python & Tkinter (Tcl/Tk) | Runtime & GUI | PSF / BSD-style | https://www.python.org |
+| `pyobjc-framework-Cocoa` | Corrects the macOS menu bar app name + forces light appearance | MIT | https://github.com/ronaldoussoren/pyobjc |
+| `pywebview` | Renders the GUI (HTML/CSS in a native WebView) | BSD-3-Clause | https://github.com/r0x0r/pywebview |
+| Python & Tkinter (Tcl/Tk) | Runtime; Tkinter for the one-time setup window only (the app itself is pywebview) | PSF / BSD-style | https://www.python.org |
 | **`fpdf2`** | PDF output | **LGPL-3.0** | https://github.com/py-pdf/fpdf2 |
 | **ffmpeg** | Audio/video decoding | **LGPL-2.1+ / GPL** (build-dependent) | https://ffmpeg.org |
+| `relocatable-python` (build-time only, vendored in `vendor/`) | Makes the bundled Python.framework work outside `/Library/Frameworks/` | Apache-2.0 | https://github.com/gregneagle/relocatable-python |
 
 ## Copyleft components
 
-These two are not MIT-licensed. Because Whisper Transcriber installs them at
-runtime rather than redistributing them, the obligations fall on whoever
-distributes the binaries (Homebrew for ffmpeg, PyPI for `fpdf2`). If you ever
-repackage or redistribute the app together with these components, review their
-terms:
+These two are not MIT-licensed.
 
-- **ffmpeg** — LGPL-2.1-or-later / GPL (Homebrew's build is typically GPL). See
-  https://ffmpeg.org/legal.html.
-- **`fpdf2`** — LGPL-3.0-only. See https://www.gnu.org/licenses/lgpl-3.0.html.
+- **ffmpeg** — LGPL-2.1-or-later / GPL (Homebrew's build is typically GPL,
+  depending on which encoders are enabled — check the `configuration:` line
+  in `ffmpeg -version` for the exact build). In DMG builds it ships as an
+  unmodified binary invoked as a separate subprocess (mere aggregation, not
+  a derivative work), the same way Homebrew already distributes it. In
+  source installs it's installed via Homebrew directly, so the redistribution
+  obligations fall on Homebrew. See https://ffmpeg.org/legal.html. If you plan
+  to distribute this app commercially, verify your ffmpeg build's exact
+  license terms.
+- **`fpdf2`** — LGPL-3.0-only, installed at runtime via `pip`, not bundled.
+  See https://www.gnu.org/licenses/lgpl-3.0.html.
+
+## Build-time-only tool
+
+`vendor/relocatable-python/` (Apache-2.0, by Greg Neagle) is vendored source
+used by `build-dmg.sh` to patch the bundled Python.framework's binaries so
+they work outside `/Library/Frameworks/`. It runs only on the build machine —
+its own source files aren't copied into the app or the DMG, only their
+effect (patched Mach-O binaries) is. See `vendor/relocatable-python/README.md`
+and `LICENSE` for the full attribution.
 
 ## MIT license text (covers the MIT-licensed components above)
 

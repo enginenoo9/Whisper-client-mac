@@ -1,8 +1,10 @@
 #!/bin/bash
 #
-# Whisper Transcriber — setup / repair script.
+# Whisper Transcriber — setup / repair script (source-install path).
 # Double-click to install or update everything. Safe to run more than once.
-# The .app launcher also calls this automatically on first launch.
+# DMG installs don't need this — the .app sets itself up via its bundled
+# bootstrap on first launch. This script exists for running from a git
+# checkout with Homebrew, and as a manual repair tool.
 #
 set -e
 
@@ -58,7 +60,7 @@ else
 fi
 echo "→ Installing / updating mlx-whisper…"
 "$WHISPER_DIR/venv/bin/pip" install --upgrade pip >/dev/null
-"$WHISPER_DIR/venv/bin/pip" install --upgrade mlx-whisper fpdf2 python-docx sounddevice
+"$WHISPER_DIR/venv/bin/pip" install --upgrade mlx-whisper fpdf2 python-docx sounddevice pyobjc-framework-Cocoa pywebview
 echo ""
 
 # --- 4. Place app files in ~/Whisper (predictable launcher paths) -----------
