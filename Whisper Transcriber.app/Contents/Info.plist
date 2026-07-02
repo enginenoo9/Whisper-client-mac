@@ -31,5 +31,7 @@
     <string>public.app-category.productivity</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Whisper Transcriber needs microphone access for live transcription.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Whisper Transcriber uses System Events to paste live transcription into the app you're typing in (optional auto-insert feature).</string>
 </dict>
 </plist>

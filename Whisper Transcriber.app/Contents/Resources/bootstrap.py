@@ -18,7 +18,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-BG, TEXT, MUTED = "#f0f0f0", "#1a1a1a", "#666666"
+BG, TEXT, MUTED = "#f5f5f7", "#1d1d1f", "#86868b"
 LOG_BG, LOG_FG = "#1e1e1e", "#d4d4d4"
 
 REQUIRED_PACKAGES = ["mlx-whisper", "fpdf2", "python-docx", "sounddevice", "pyobjc-framework-Cocoa"]

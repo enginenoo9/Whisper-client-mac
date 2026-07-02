@@ -21,13 +21,16 @@ from tkinter import filedialog, messagebox, ttk
 # py2app sets sys.frozen; use Python API for all ML calls when bundled.
 FROZEN = getattr(sys, "frozen", False)
 
-# ── Palette ───────────────────────────────────────────────────────────────────
-BG     = "#f0f0f0"
-TEXT   = "#1a1a1a"
-MUTED  = "#666666"
+# ── Palette (Apple-style light theme) ────────────────────────────────────────
+BG     = "#f5f5f7"   # window background — Apple's light gray
+CARD   = "#ffffff"   # input fields / buttons
+TEXT   = "#1d1d1f"
+MUTED  = "#86868b"
+BORDER = "#d2d2d7"
 ACCENT = "#0071e3"
-LOG_BG = "#1e1e1e"
+LOG_BG = "#1e1e1e"   # progress box stays terminal-dark on purpose
 LOG_FG = "#d4d4d4"
+FONT   = "Helvetica Neue"
 
 MODELS = [
     ("Large V3  — Best accuracy  (~3 GB)",  "mlx-community/whisper-large-v3-mlx"),
@@ -62,9 +65,9 @@ class LiveTranscribeWindow:
         self.win = tk.Toplevel(parent)
         self.win.title("Live Transcription")
         self.win.configure(bg=BG)
-        self.win.geometry("600x500")
+        self.win.geometry("620x580")
         self.win.resizable(True, True)
-        self.win.minsize(480, 380)
+        self.win.minsize(520, 460)
         self.win.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._recording   = False
@@ -73,6 +76,7 @@ class LiveTranscribeWindow:
         self._elapsed     = 0
         self._timer_id    = None
         self.out_format   = tk.StringVar(value="txt")
+        self.auto_insert  = tk.BooleanVar(value=False)
 
         self._build()
         self._setup_theme()
@@ -80,13 +84,13 @@ class LiveTranscribeWindow:
     # ── Theme (inherits from parent but applied locally) ──────────────────────
 
     def _setup_theme(self):
-        style = ttk.Style(self.win)
-        style.configure("Live.Go.TButton", font=("Helvetica", 13, "bold"), padding=6)
+        # Shares the ttk styles configured by the main window's theme.
+        pass
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build(self):
-        frm = ttk.Frame(self.win, padding=(24, 16))
+        frm = ttk.Frame(self.win, padding=(28, 20))
         frm.pack(fill="both", expand=True)
 
         ttk.Label(frm, text="Live Transcription",
@@ -115,16 +119,28 @@ class LiveTranscribeWindow:
         ttk.Label(frm, textvariable=self._status_var,
                   style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
 
+        # Auto-insert: live-dictate into whatever app has focus
+        ttk.Checkbutton(
+            frm, text="Auto-insert into the app you're typing in",
+            variable=self.auto_insert).pack(anchor="w")
+        ttk.Label(frm,
+                  text="While recording, click into any chat or document — "
+                       "each chunk is pasted at your cursor (uses ⌘V, so it "
+                       "replaces your clipboard). First use asks for "
+                       "Accessibility permission.",
+                  style="Muted.TLabel", wraplength=520, justify="left"
+                  ).pack(anchor="w", padx=(24, 0), pady=(0, 8))
+
         # Live transcript text area
         txt_frm = ttk.Frame(frm)
         txt_frm.pack(fill="both", expand=True, pady=(0, 10))
 
         self._text = tk.Text(
-            txt_frm, font=("Helvetica", 12),
-            bg="white", fg=TEXT, relief="flat",
+            txt_frm, font=(FONT, 13),
+            bg=CARD, fg=TEXT, relief="flat",
             highlightthickness=1,
-            highlightcolor="#b0b0b0", highlightbackground="#d0d0d0",
-            wrap="word", padx=8, pady=8,
+            highlightcolor=BORDER, highlightbackground=BORDER,
+            wrap="word", padx=10, pady=10,
         )
         sb = ttk.Scrollbar(txt_frm, orient="vertical",
                            command=self._text.yview)
@@ -262,9 +278,46 @@ class LiveTranscribeWindow:
                 sep = " " if self._transcript else ""
                 self._transcript += sep + text
                 self.win.after(0, lambda t=self._transcript: self._update_text(t))
+                if self.auto_insert.get():
+                    self._paste_into_front_app(text + " ")
         except Exception as exc:
             self.win.after(
                 0, lambda e=str(exc): self._set_status(f"Transcription error: {e}"))
+
+    # ── Auto-insert into the frontmost app ────────────────────────────────────
+
+    def _own_app_is_frontmost(self) -> bool:
+        try:
+            from AppKit import NSWorkspace  # pyobjc — installed by setup
+            front = NSWorkspace.sharedWorkspace().frontmostApplication()
+            return front is not None and front.processIdentifier() == os.getpid()
+        except Exception:
+            return False
+
+    def _paste_into_front_app(self, text: str):
+        """Paste a chunk wherever the user's cursor is, via clipboard + ⌘V.
+
+        Skipped when Whisper Transcriber itself is frontmost (pasting into
+        our own transcript box would duplicate the text). The keystroke
+        needs Accessibility permission — macOS prompts on first use."""
+        if self._own_app_is_frontmost():
+            return
+        try:
+            subprocess.run(["/usr/bin/pbcopy"], input=text.encode("utf-8"),
+                           timeout=5, check=True)
+            r = subprocess.run(
+                ["/usr/bin/osascript", "-e",
+                 'tell application "System Events" to '
+                 'keystroke "v" using command down'],
+                capture_output=True, text=True, timeout=10)
+            if r.returncode != 0:
+                self.win.after(0, lambda: self._set_status(
+                    "Auto-insert blocked — allow Whisper Transcriber in "
+                    "System Settings → Privacy & Security → Accessibility, "
+                    "then try again."))
+        except Exception as exc:
+            self.win.after(0, lambda e=str(exc): self._set_status(
+                f"Auto-insert error: {e}"))
 
     def _on_finished(self):
         words = len(self._transcript.split()) if self._transcript else 0
@@ -335,7 +388,7 @@ class WhisperApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Whisper Transcriber")
-        self.root.geometry("680x710")
+        self.root.geometry("700x750")
         self.root.resizable(False, False)
         self.root.configure(bg=BG)
 
@@ -577,24 +630,47 @@ class WhisperApp:
         except tk.TclError:
             pass
         style.configure(".", background=BG, foreground=TEXT,
-                        fieldbackground="white", font=("Helvetica", 12))
+                        fieldbackground=CARD, font=(FONT, 13))
         style.configure("TFrame",       background=BG)
         style.configure("TLabel",       background=BG, foreground=TEXT)
-        style.configure("Title.TLabel", font=("Helvetica", 18, "bold"))
-        style.configure("Sub.TLabel",   font=("Helvetica", 10), foreground=MUTED)
-        style.configure("Muted.TLabel", font=("Helvetica", 11), foreground=MUTED)
-        style.configure("Warn.TLabel",  font=("Helvetica", 11), foreground="#9a6700")
-        style.configure("TButton",      font=("Helvetica", 12), padding=4)
-        style.configure("Go.TButton",   font=("Helvetica", 13, "bold"), padding=6)
+        style.configure("Title.TLabel", font=(FONT, 24, "bold"))
+        style.configure("Sub.TLabel",   font=(FONT, 12), foreground=MUTED)
+        style.configure("Muted.TLabel", font=(FONT, 12), foreground=MUTED)
+        style.configure("Warn.TLabel",  font=(FONT, 12), foreground="#9a6700")
+
+        # Secondary buttons: flat white with a hairline border, macOS-like.
+        style.configure("TButton", font=(FONT, 13), padding=(14, 6),
+                        background=CARD, foreground=TEXT,
+                        bordercolor=BORDER, lightcolor=CARD, darkcolor=CARD,
+                        borderwidth=1, focusthickness=0, relief="flat")
+        style.map("TButton",
+                  background=[("disabled", CARD), ("pressed", "#ececf0"),
+                              ("active", "#f7f7fa")],
+                  foreground=[("disabled", "#b8b8bd")])
+
+        # Primary action: filled accent button, white text.
+        style.configure("Go.TButton", font=(FONT, 14, "bold"), padding=(20, 8),
+                        background=ACCENT, foreground="white",
+                        bordercolor=ACCENT, lightcolor=ACCENT, darkcolor=ACCENT)
+        style.map("Go.TButton",
+                  background=[("disabled", "#a7c7f2"), ("pressed", "#005bbf"),
+                              ("active", "#0077ed")],
+                  foreground=[("disabled", "white")])
+
         style.configure("TRadiobutton", background=BG, foreground=TEXT,
-                        font=("Helvetica", 11))
+                        font=(FONT, 12))
         style.map("TRadiobutton", background=[("active", BG)])
-        style.configure("TCombobox",    padding=3)
+        style.configure("TCheckbutton", background=BG, foreground=TEXT,
+                        font=(FONT, 12))
+        style.map("TCheckbutton", background=[("active", BG)])
+        style.configure("TCombobox", padding=4, fieldbackground=CARD,
+                        background=CARD, bordercolor=BORDER,
+                        lightcolor=CARD, darkcolor=CARD, arrowcolor=MUTED)
 
     # ── Build UI ──────────────────────────────────────────────────────────────
 
     def _build(self):
-        main = ttk.Frame(self.root, padding=(28, 18))
+        main = ttk.Frame(self.root, padding=(32, 24))
         main.pack(fill="both", expand=True)
 
         ttk.Label(main, text="Whisper Transcriber",
@@ -634,13 +710,13 @@ class WhisperApp:
         queue_cell.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=6)
 
         self.file_listbox = tk.Listbox(
-            queue_cell, height=4, font=("Monaco", 10),
+            queue_cell, height=4, font=("Menlo", 11),
             selectmode=tk.EXTENDED, activestyle="none",
-            bg="white", fg=TEXT,
+            bg=CARD, fg=TEXT,
             selectbackground=ACCENT, selectforeground="white",
             relief="flat", borderwidth=0,
             highlightthickness=1,
-            highlightcolor="#b0b0b0", highlightbackground="#d0d0d0",
+            highlightcolor=BORDER, highlightbackground=BORDER,
         )
         sb = ttk.Scrollbar(queue_cell, orient="vertical",
                            command=self.file_listbox.yview)
@@ -695,12 +771,13 @@ class WhisperApp:
         ttk.Button(btn_row, text="Live Transcribe…",
                    command=self._open_live_window).pack(side="left")
 
-        ttk.Label(main, text="Progress",
-                  font=("Helvetica", 10, "bold")).pack(anchor="w")
-        self.log = tk.Text(main, height=7, font=("Monaco", 10),
+        ttk.Label(main, text="PROGRESS", foreground=MUTED,
+                  font=(FONT, 10, "bold")).pack(anchor="w")
+        self.log = tk.Text(main, height=7, font=("Menlo", 10),
                            bg=LOG_BG, fg=LOG_FG, relief="flat",
-                           state="disabled", highlightthickness=0)
-        self.log.pack(fill="x", pady=(2, 8))
+                           state="disabled", highlightthickness=0,
+                           padx=10, pady=8)
+        self.log.pack(fill="x", pady=(4, 8))
 
         bottom = ttk.Frame(main)
         bottom.pack(fill="x", pady=(2, 0))

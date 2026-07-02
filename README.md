@@ -140,6 +140,22 @@ Click **Live Transcribe…** to transcribe from your microphone in real time.
 
 macOS will prompt for microphone permission on first use.
 
+### Auto-insert (dictate into any app)
+
+Check **Auto-insert into the app you're typing in**, start recording, then
+click into any chat box, email, or document. Each transcribed chunk is pasted
+at your cursor as it's processed — live dictation into whatever app you're in.
+
+Notes:
+- Uses the clipboard + ⌘V under the hood, so **it replaces whatever was on
+  your clipboard** while it's on.
+- First use triggers macOS permission prompts (Automation + Accessibility).
+  If nothing pastes, allow Whisper Transcriber under **System Settings →
+  Privacy & Security → Accessibility** and try again.
+- Chunks are only pasted while another app is frontmost — clicking back into
+  Whisper Transcriber pauses inserting (the transcript still accumulates in
+  the window either way).
+
 ---
 
 ## Models
@@ -170,7 +186,8 @@ macOS will prompt for microphone permission on first use.
 | `build-dmg.sh` | Builds the standalone DMG (bundles Python + ffmpeg) |
 | `setup.command` | Manual install / repair script (source-install path) |
 | `launch.command` | Fallback launcher (source-install path) |
-| `whisper_icon.icns` / `.png` | App icon |
+| `whisper_icon.icns` / `.png` | App icon (generated — don't edit by hand) |
+| `scripts/generate-icon.py` | Regenerates the icon (`pip3 install pillow`, then run it) |
 
 > **Editing the GUI:** the `.app` ships its own copy of `whisper_transcriber.py`
 > at `Contents/Resources/` and reinstalls it into `~/Whisper/` on every launch.
@@ -198,6 +215,12 @@ Homebrew.
 **"Homebrew Python not found" dialog**
 Only relevant to the run-from-source path. Install Homebrew and run
 `brew install python-tk`, then reopen the app. (The DMG doesn't need this.)
+
+**Auto-insert doesn't paste anything**
+Allow Whisper Transcriber under **System Settings → Privacy & Security →
+Accessibility** (and approve the Automation prompt if one appears), then
+try again. Also make sure your cursor is in another app — inserting pauses
+while Whisper Transcriber itself is frontmost.
 
 **Transcription is slow**
 Use *Medium* or *Small*. On M1, Medium transcribes ~1 hour of audio in a few
