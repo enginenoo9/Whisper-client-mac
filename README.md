@@ -74,11 +74,14 @@ extracts `Python.framework` and rewrites its binaries so they work from
 inside an app bundle instead of only from `/Library/Frameworks/` — the
 official installer's framework is hard-coded to that one absolute path, so
 copying it as-is crashes at launch. No system-wide Python install happens.
-The script then stages a copy of Homebrew's `ffmpeg`, strips the unused
-x86_64 slice from every bundled binary (this app is Apple Silicon-only —
-mlx-whisper has no Intel build — and a leftover Intel slice is what triggers
-macOS's "this app uses Rosetta" deprecation notice even though it can never
-actually run), bundles everything into `Whisper Transcriber.app`, ad-hoc
+The script then stages a copy of Homebrew's `ffmpeg`, removes the standalone
+x86_64-only `python3.12-intel64` binary python.org ships alongside the
+universal one (unneeded — nothing here supports Intel), strips the unused
+x86_64 slice from every remaining bundled binary (this app is Apple
+Silicon-only — mlx-whisper has no Intel build — and leftover Intel code is
+what triggers macOS's "this app uses Rosetta" deprecation notice even
+though it can never actually run), bundles everything into
+`Whisper Transcriber.app`, ad-hoc
 code-signs it, and produces `dist/Whisper-Transcriber-<version>.dmg`.
 
 mlx-whisper itself is *not* bundled — it's a namespace package with runtime
@@ -222,6 +225,11 @@ with the system Python.
 - **PDF output** uses `fpdf2`. **DOCX output** uses `python-docx`.
 - **Live transcription** uses `sounddevice` to capture 10-second audio chunks
   from the microphone, then passes each chunk directly to `mlx_whisper.transcribe()`.
+- The final `execve` into `~/Whisper/venv`'s Python means the running process
+  lives outside `Contents/MacOS/`, so macOS can't trace it back to
+  `Info.plist` for the menu bar — it shows "Python" instead of the app name
+  unless corrected. `pyobjc-framework-Cocoa` overrides that at startup
+  (`_fix_macos_menu_bar_name()` in `whisper_transcriber.py`).
 
 ---
 

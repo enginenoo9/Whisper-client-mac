@@ -21,8 +21,8 @@ from tkinter import messagebox, ttk
 BG, TEXT, MUTED = "#f0f0f0", "#1a1a1a", "#666666"
 LOG_BG, LOG_FG = "#1e1e1e", "#d4d4d4"
 
-REQUIRED_PACKAGES = ["mlx-whisper", "fpdf2", "python-docx", "sounddevice"]
-IMPORT_CHECK = "import mlx_whisper, fpdf, docx, sounddevice"
+REQUIRED_PACKAGES = ["mlx-whisper", "fpdf2", "python-docx", "sounddevice", "pyobjc-framework-Cocoa"]
+IMPORT_CHECK = "import mlx_whisper, fpdf, docx, sounddevice, Foundation"
 
 WHISPER_DIR = os.path.expanduser("~/Whisper")
 VENV_DIR = os.path.join(WHISPER_DIR, "venv")

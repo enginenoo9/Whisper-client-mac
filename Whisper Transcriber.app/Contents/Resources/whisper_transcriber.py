@@ -1194,7 +1194,22 @@ class WhisperApp:
         threading.Thread(target=_do, daemon=True).start()
 
 
+def _fix_macos_menu_bar_name():
+    """Cocoa reads the current process's own bundle info to label the menu
+    bar. Since the app execs into a bare venv Python living outside
+    Contents/MacOS/, macOS can't trace the process back to Info.plist and
+    shows "Python" instead of "Whisper Transcriber". Override the in-memory
+    bundle dict Cocoa reads when it actually draws the menu bar."""
+    try:
+        from Foundation import NSBundle
+        info = NSBundle.mainBundle().infoDictionary()
+        info["CFBundleName"] = "Whisper Transcriber"
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    _fix_macos_menu_bar_name()
     root = tk.Tk()
     WhisperApp(root)
     root.mainloop()

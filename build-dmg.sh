@@ -111,6 +111,13 @@ rm -rf "$FW_VERSION_DIR"/lib/python*/test \
        "$FW_VERSION_DIR"/share/doc \
        2>/dev/null || true
 
+# python.org also ships a standalone x86_64-only "-intel64" binary for
+# people who need to force Intel compatibility. This app has no use for
+# it — nothing here runs on Intel — and unlike the universal binaries
+# thinned below, it's genuine Intel-only code the thinning step can't
+# touch (it's already single-arch, not fat). Just remove it.
+rm -f "$FW_VERSION_DIR"/bin/python3*-intel64
+
 echo "  Bundled: $("$FW_PYTHON" --version)"
 
 # ── 3. Stage ffmpeg (from Homebrew, build machine only) ──────────────────────
