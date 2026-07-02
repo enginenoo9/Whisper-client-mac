@@ -321,6 +321,11 @@ HTML = r"""<!DOCTYPE html>
 
   function api() { return window.pywebview.api; }
 
+  // A rejected api() promise with no .catch() fails completely silently —
+  // that's exactly what hid the add-files bug. Route uncaught rejections
+  // through here so a future one shows up instead of vanishing.
+  function reportErr(e) { console.error(e); setStatus('Error — see log or try again.'); }
+
   window.addEventListener('pywebviewready', function () {
     api().ready().then(function (s) {
       STATE.models = s.models; STATE.formats = s.formats; STATE.liveFormats = s.liveFormats;
@@ -332,7 +337,7 @@ HTML = r"""<!DOCTYPE html>
       if (!s.mlxInstalled) document.getElementById('banner').classList.add('show');
       setDownloadBtn(s.modelCached ? {enabled:false, text:"Downloaded ✓"} : {enabled:true, text:"Download"});
       renderFiles([]);
-    });
+    }).catch(reportErr);
   });
 
   function renderModels() {
@@ -384,10 +389,10 @@ HTML = r"""<!DOCTYPE html>
                          api().set_model(STATE.modelIndex); }
   function onCleanup() { STATE.cleanup = document.getElementById('cleanup').checked; api().set_cleanup(STATE.cleanup); }
 
-  function addFiles()    { api().add_files().then(renderFiles); }
-  function removeFiles() { api().remove_files(STATE.sel).then(renderFiles); }
-  function clearFiles()  { api().clear_files().then(renderFiles); }
-  function chooseOutdir(){ api().choose_outdir().then(function (p) { document.getElementById('outdir').textContent = p; }); }
+  function addFiles()    { api().add_files().then(renderFiles).catch(reportErr); }
+  function removeFiles() { api().remove_files(STATE.sel).then(renderFiles).catch(reportErr); }
+  function clearFiles()  { api().clear_files().then(renderFiles).catch(reportErr); }
+  function chooseOutdir(){ api().choose_outdir().then(function (p) { document.getElementById('outdir').textContent = p; }).catch(reportErr); }
   function downloadModel(){ api().download_model(); }
   function transcribe()  { api().transcribe(); }
   function runSetup()    { api().run_setup(); }
@@ -412,7 +417,7 @@ HTML = r"""<!DOCTYPE html>
   function openCleanup()  { document.getElementById('cleanupOverlay').classList.add('show');
                             api().cleanup_info().then(function (s) {
                               document.getElementById('cleanupInfo').textContent =
-                                s.count + ' model(s) downloaded — about ' + s.size + ' on disk.'; }); }
+                                s.count + ' model(s) downloaded — about ' + s.size + ' on disk.'; }).catch(reportErr); }
   function closeCleanup() { document.getElementById('cleanupOverlay').classList.remove('show'); }
   function deleteModels() { closeCleanup(); api().delete_models(); }
   function uninstallAll() { if (confirm('Remove ALL models and Python packages, then quit?')) api().uninstall_everything(); }
@@ -540,10 +545,19 @@ class Api:
     # ── File queue ────────────────────────────────────────────────────────────
 
     def add_files(self):
-        types = ("Audio / Video Files (*.mp3;*.mp4;*.m4a;*.wav;*.flac;*.aac;*.ogg;*.mkv;*.webm)",
+        # pywebview validates each filter description against
+        # ^([\w ]+)\(...\)$ — word chars and spaces only. A "/" (as in the
+        # previous "Audio / Video Files") fails that regex and raises
+        # ValueError before the dialog even opens, which silently killed
+        # this button (JS called it with .then() and no .catch()).
+        types = ("Media Files (*.mp3;*.mp4;*.m4a;*.wav;*.flac;*.aac;*.ogg;*.mkv;*.webm)",
                  "All files (*.*)")
-        result = self.window.create_file_dialog(
-            webview.FileDialog.OPEN, allow_multiple=True, file_types=types)
+        try:
+            result = self.window.create_file_dialog(
+                webview.FileDialog.OPEN, allow_multiple=True, file_types=types)
+        except Exception as exc:
+            self._log(f"✗ Couldn't open file picker: {exc}")
+            return [os.path.basename(p) for p in self._file_queue]
         if result:
             for p in result:
                 if p not in self._file_queue:
@@ -564,7 +578,11 @@ class Api:
         return []
 
     def choose_outdir(self):
-        result = self.window.create_file_dialog(webview.FileDialog.FOLDER)
+        try:
+            result = self.window.create_file_dialog(webview.FileDialog.FOLDER)
+        except Exception as exc:
+            self._log(f"✗ Couldn't open folder picker: {exc}")
+            return self.outdir
         if result:
             self.outdir = result[0]
             self._save_config()
