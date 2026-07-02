@@ -149,7 +149,7 @@ class LiveTranscribeWindow:
 
         self._toggle_btn = ttk.Button(btn_row, text="Start Recording",
                                       command=self._toggle,
-                                      style="Go.TButton")
+                                      style="Go.TButton", default="active")
         self._toggle_btn.pack(side="left")
 
         ttk.Button(btn_row, text="Copy",
@@ -614,48 +614,35 @@ class WhisperApp:
     # ── Theme ─────────────────────────────────────────────────────────────────
 
     def _setup_theme(self):
+        # Use macOS's native "aqua" ttk theme rather than the synthetic
+        # "clam" theme the old code used. clam's Combobox and Checkbutton
+        # elements have their own hard-coded bevel/box-and-X look that
+        # style.configure() can't fully override — that's what was reading
+        # as dated before, and remains dated after color-only tweaks.
+        # Native aqua renders proper rounded, modern, system-matching
+        # widgets automatically, at the cost of not being able to hand-pick
+        # button/combobox colors (aqua mostly ignores those). Primary
+        # actions still get a native blue "prominent button" treatment via
+        # the button's `default="active"` option, set where those buttons
+        # are created below, instead of a custom fill color.
         style = ttk.Style()
         try:
-            style.theme_use("clam")
+            style.theme_use("aqua")
         except tk.TclError:
             pass
-        style.configure(".", background=BG, foreground=TEXT,
-                        fieldbackground=CARD, font=(FONT, 13))
+        style.configure(".", background=BG, foreground=TEXT, font=(FONT, 13))
         style.configure("TFrame",       background=BG)
         style.configure("TLabel",       background=BG, foreground=TEXT)
         style.configure("Title.TLabel", font=(FONT, 24, "bold"))
         style.configure("Sub.TLabel",   font=(FONT, 12), foreground=MUTED)
         style.configure("Muted.TLabel", font=(FONT, 12), foreground=MUTED)
         style.configure("Warn.TLabel",  font=(FONT, 12), foreground="#9a6700")
-
-        # Secondary buttons: flat white with a hairline border, macOS-like.
-        style.configure("TButton", font=(FONT, 13), padding=(14, 6),
-                        background=CARD, foreground=TEXT,
-                        bordercolor=BORDER, lightcolor=CARD, darkcolor=CARD,
-                        borderwidth=1, focusthickness=0, relief="flat")
-        style.map("TButton",
-                  background=[("disabled", CARD), ("pressed", "#ececf0"),
-                              ("active", "#f7f7fa")],
-                  foreground=[("disabled", "#b8b8bd")])
-
-        # Primary action: filled accent button, white text.
-        style.configure("Go.TButton", font=(FONT, 14, "bold"), padding=(20, 8),
-                        background=ACCENT, foreground="white",
-                        bordercolor=ACCENT, lightcolor=ACCENT, darkcolor=ACCENT)
-        style.map("Go.TButton",
-                  background=[("disabled", "#a7c7f2"), ("pressed", "#005bbf"),
-                              ("active", "#0077ed")],
-                  foreground=[("disabled", "white")])
-
+        style.configure("TButton",      font=(FONT, 13))
+        style.configure("Go.TButton",   font=(FONT, 14, "bold"))
         style.configure("TRadiobutton", background=BG, foreground=TEXT,
                         font=(FONT, 12))
-        style.map("TRadiobutton", background=[("active", BG)])
         style.configure("TCheckbutton", background=BG, foreground=TEXT,
                         font=(FONT, 12))
-        style.map("TCheckbutton", background=[("active", BG)])
-        style.configure("TCombobox", padding=4, fieldbackground=CARD,
-                        background=CARD, bordercolor=BORDER,
-                        lightcolor=CARD, darkcolor=CARD, arrowcolor=MUTED)
 
     # ── Build UI ──────────────────────────────────────────────────────────────
 
@@ -755,7 +742,8 @@ class WhisperApp:
 
         self.transcribe_btn = ttk.Button(btn_row, text="Transcribe",
                                          command=self._transcribe,
-                                         style="Go.TButton", state="disabled")
+                                         style="Go.TButton", state="disabled",
+                                         default="active")
         self.transcribe_btn.pack(side="left", padx=(0, 10))
 
         ttk.Button(btn_row, text="Live Transcribe…",

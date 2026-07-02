@@ -95,9 +95,12 @@ class SetupWindow:
         self.root.after(200, self._start)
 
     def _build(self):
+        # Native aqua theme (see WhisperApp._setup_theme in
+        # whisper_transcriber.py for why: clam's Combobox/Checkbutton
+        # elements resist color styling and look dated).
         style = ttk.Style(self.root)
         try:
-            style.theme_use("clam")
+            style.theme_use("aqua")
         except tk.TclError:
             pass
         style.configure(".", background=BG, foreground=TEXT, font=("Helvetica", 12))
