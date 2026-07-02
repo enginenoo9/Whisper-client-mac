@@ -113,7 +113,7 @@ rm -rf "$FW_VERSION_DIR"/lib/python*/test \
 
 echo "  Bundled: $("$FW_PYTHON" --version)"
 
-# ── 4. Stage ffmpeg (from Homebrew, build machine only) ──────────────────────
+# ── 3. Stage ffmpeg (from Homebrew, build machine only) ──────────────────────
 echo "→ Staging ffmpeg…"
 FFMPEG_SRC=""
 for cand in "$(brew --prefix 2>/dev/null)/bin/ffmpeg" /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg; do
@@ -127,6 +127,28 @@ fi
 cp "$FFMPEG_SRC" "$RESOURCES_DIR/bin/ffmpeg"
 chmod +x "$RESOURCES_DIR/bin/ffmpeg"
 echo "  Staged: $FFMPEG_SRC → Contents/Resources/bin/ffmpeg"
+
+# ── 4. Strip unused x86_64 code ───────────────────────────────────────────────
+# This app only ever runs on Apple Silicon — mlx/mlx-whisper have no x86_64
+# build at all — but python.org's universal2 installer ships both
+# architectures, and some Homebrew formulas do too. Keeping the unused Intel
+# slice around is exactly what triggers macOS's "this app uses Rosetta and
+# may not be supported in a future version of macOS" notification, even
+# though that code path can never actually execute. Thin everything to
+# arm64-only.
+echo "→ Stripping unused x86_64 code (arm64-only app; Intel code is what"
+echo "  triggers macOS's Rosetta deprecation notice)…"
+while IFS= read -r -d '' f; do
+    info="$(lipo -info "$f" 2>/dev/null || true)"
+    if [[ "$info" == *"x86_64"* && "$info" == *"arm64"* ]]; then
+        perms="$(stat -f "%Lp" "$f")"
+        lipo -thin arm64 -output "${f}.thin" "$f"
+        mv "${f}.thin" "$f"
+        chmod "$perms" "$f"
+    fi
+done < <(find "$APP_DST" -type f -perm -u+x -print0)
+echo "  Verifying framework still works after thinning…"
+"$FW_PYTHON" --version
 
 # ── 5. Ad-hoc code sign ───────────────────────────────────────────────────────
 # No Apple Developer ID cert is configured for this project, so this is an

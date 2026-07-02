@@ -74,9 +74,12 @@ extracts `Python.framework` and rewrites its binaries so they work from
 inside an app bundle instead of only from `/Library/Frameworks/` — the
 official installer's framework is hard-coded to that one absolute path, so
 copying it as-is crashes at launch. No system-wide Python install happens.
-The script then stages a copy of Homebrew's `ffmpeg`, bundles both into
-`Whisper Transcriber.app`, ad-hoc code-signs it, and produces
-`dist/Whisper-Transcriber-<version>.dmg`.
+The script then stages a copy of Homebrew's `ffmpeg`, strips the unused
+x86_64 slice from every bundled binary (this app is Apple Silicon-only —
+mlx-whisper has no Intel build — and a leftover Intel slice is what triggers
+macOS's "this app uses Rosetta" deprecation notice even though it can never
+actually run), bundles everything into `Whisper Transcriber.app`, ad-hoc
+code-signs it, and produces `dist/Whisper-Transcriber-<version>.dmg`.
 
 mlx-whisper itself is *not* bundled — it's a namespace package with runtime
 Metal shader compilation that breaks every static bundler (this project tried
