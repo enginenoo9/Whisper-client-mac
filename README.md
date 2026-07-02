@@ -234,7 +234,10 @@ with the system Python.
 
 ## How it works
 
-- The GUI is a tkinter Python app (`whisper_transcriber.py`).
+- The GUI is a tkinter Python app (`whisper_transcriber.py`), styled with
+  `ttkbootstrap` (flat, modern widget rendering — Tk's native macOS theme
+  uses pre-Big-Sur bezel styles, and its synthetic themes have widgets that
+  resist recoloring, so ttkbootstrap draws its own instead of using either).
 - `Contents/MacOS/launcher` (bash) picks a Python interpreter — the bundled
   `Python.framework` if this was built with `build-dmg.sh`, otherwise a
   Homebrew Python for source installs — and hands off to `bootstrap.py`.

@@ -14,7 +14,17 @@ import sys
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
+
+# Tk's native macOS theme ("aqua") renders with pre-Big-Sur bezel styles —
+# Tcl/Tk was never updated for the rounded, modern macOS 11+ look — and the
+# synthetic "clam" theme has its own hard-coded dated Combobox/Checkbutton
+# elements that resist recoloring. ttkbootstrap draws its own flat, modern
+# widget chrome instead of deferring to either, sidestepping both problems
+# (and, being self-drawn, doesn't follow system Dark Mode unless you pick
+# one of its dark themes). It re-exports the same class names as
+# tkinter.ttk, so this is close to a drop-in replacement for that import.
+import ttkbootstrap as ttk
 
 # ── Palette (Apple-style light theme) ────────────────────────────────────────
 BG     = "#f5f5f7"   # window background — Apple's light gray
@@ -149,7 +159,7 @@ class LiveTranscribeWindow:
 
         self._toggle_btn = ttk.Button(btn_row, text="Start Recording",
                                       command=self._toggle,
-                                      style="Go.TButton", default="active")
+                                      bootstyle="primary")
         self._toggle_btn.pack(side="left")
 
         ttk.Button(btn_row, text="Copy",
@@ -385,6 +395,12 @@ class WhisperApp:
         self.root.title("Whisper Transcriber")
         self.root.geometry("700x750")
         self.root.resizable(False, False)
+
+        # Match raw (non-ttk) window backgrounds to ttkbootstrap's actual
+        # theme background exactly, rather than guessing a hex value —
+        # used below and by LiveTranscribeWindow / the cleanup dialog.
+        global BG
+        BG = ttk.Style().colors.bg
         self.root.configure(bg=BG)
 
         self._setup_theme()
@@ -614,35 +630,20 @@ class WhisperApp:
     # ── Theme ─────────────────────────────────────────────────────────────────
 
     def _setup_theme(self):
-        # Use macOS's native "aqua" ttk theme rather than the synthetic
-        # "clam" theme the old code used. clam's Combobox and Checkbutton
-        # elements have their own hard-coded bevel/box-and-X look that
-        # style.configure() can't fully override — that's what was reading
-        # as dated before, and remains dated after color-only tweaks.
-        # Native aqua renders proper rounded, modern, system-matching
-        # widgets automatically, at the cost of not being able to hand-pick
-        # button/combobox colors (aqua mostly ignores those). Primary
-        # actions still get a native blue "prominent button" treatment via
-        # the button's `default="active"` option, set where those buttons
-        # are created below, instead of a custom fill color.
+        # ttkbootstrap.Window() already applied the theme (colors + widget
+        # chrome) when the root window was created. Layer font sizing and a
+        # couple of semantic text colors on top of that — deliberately not
+        # touching backgrounds, so as not to fight the theme's own
+        # coordinated palette the way earlier clam/aqua attempts had to.
         style = ttk.Style()
-        try:
-            style.theme_use("aqua")
-        except tk.TclError:
-            pass
-        style.configure(".", background=BG, foreground=TEXT, font=(FONT, 13))
-        style.configure("TFrame",       background=BG)
-        style.configure("TLabel",       background=BG, foreground=TEXT)
-        style.configure("Title.TLabel", font=(FONT, 24, "bold"))
-        style.configure("Sub.TLabel",   font=(FONT, 12), foreground=MUTED)
-        style.configure("Muted.TLabel", font=(FONT, 12), foreground=MUTED)
-        style.configure("Warn.TLabel",  font=(FONT, 12), foreground="#9a6700")
-        style.configure("TButton",      font=(FONT, 13))
-        style.configure("Go.TButton",   font=(FONT, 14, "bold"))
-        style.configure("TRadiobutton", background=BG, foreground=TEXT,
-                        font=(FONT, 12))
-        style.configure("TCheckbutton", background=BG, foreground=TEXT,
-                        font=(FONT, 12))
+        style.configure(".",             font=(FONT, 13))
+        style.configure("Title.TLabel",  font=(FONT, 24, "bold"))
+        style.configure("Sub.TLabel",    font=(FONT, 12), foreground=MUTED)
+        style.configure("Muted.TLabel",  font=(FONT, 12), foreground=MUTED)
+        style.configure("Warn.TLabel",   font=(FONT, 12), foreground="#9a6700")
+        style.configure("TButton",       font=(FONT, 13))
+        style.configure("TRadiobutton",  font=(FONT, 12))
+        style.configure("TCheckbutton",  font=(FONT, 12))
 
     # ── Build UI ──────────────────────────────────────────────────────────────
 
@@ -742,8 +743,7 @@ class WhisperApp:
 
         self.transcribe_btn = ttk.Button(btn_row, text="Transcribe",
                                          command=self._transcribe,
-                                         style="Go.TButton", state="disabled",
-                                         default="active")
+                                         bootstyle="primary", state="disabled")
         self.transcribe_btn.pack(side="left", padx=(0, 10))
 
         ttk.Button(btn_row, text="Live Transcribe…",
@@ -1179,7 +1179,9 @@ def _force_light_appearance():
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    # iconphoto=None: ttkbootstrap sets its own default icon otherwise,
+    # which could compete with our Info.plist-declared .icns.
+    root = ttk.Window(themename="flatly", iconphoto=None)
     _fix_macos_menu_bar_name()
     _force_light_appearance()
     WhisperApp(root)
