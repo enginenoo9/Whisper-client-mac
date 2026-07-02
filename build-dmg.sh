@@ -96,9 +96,40 @@ fi
 echo "  Signature OK."
 
 # ── 3. Extract Python.framework from the pkg (no system install) ────────────
+# The installer is a "distribution" package wrapping several component
+# sub-packages (framework, docs, IDLE, ...). `pkgutil --expand-full` is
+# supposed to recurse into those and decompress their payloads, but that
+# behavior is inconsistent across macOS versions. Do it manually instead:
+# expand just the outer shell, find the framework sub-package, and
+# decompress its Payload (a gzip'd cpio archive) directly — this is the
+# same technique long-standing tools like relocatable-python use.
 echo "→ Extracting Python.framework…"
 EXPAND_DIR="$BUILD_DIR/pkg-expanded"
-pkgutil --expand-full "$PKG_PATH" "$EXPAND_DIR"
+pkgutil --expand "$PKG_PATH" "$EXPAND_DIR"
+
+FRAMEWORK_SUBPKG="$EXPAND_DIR/Python_Framework.pkg"
+if [ ! -d "$FRAMEWORK_SUBPKG" ]; then
+    # Sub-package name has varied across releases — fall back to a search
+    # by identifier instead of assuming an exact directory name.
+    for d in "$EXPAND_DIR"/*.pkg; do
+        if [ -f "$d/PackageInfo" ] && grep -qi "pythonframework" "$d/PackageInfo"; then
+            FRAMEWORK_SUBPKG="$d"
+            break
+        fi
+    done
+fi
+
+if [ ! -d "$FRAMEWORK_SUBPKG" ] || [ ! -f "$FRAMEWORK_SUBPKG/Payload" ]; then
+    echo "✗ Could not locate the PythonFramework component package inside the installer."
+    echo "  Contents of $EXPAND_DIR:"
+    ls "$EXPAND_DIR"
+    exit 1
+fi
+echo "  Found: $(basename "$FRAMEWORK_SUBPKG")"
+
+PAYLOAD_DIR="$BUILD_DIR/payload-extracted"
+mkdir -p "$PAYLOAD_DIR"
+( cd "$PAYLOAD_DIR" && gzip -dc < "$FRAMEWORK_SUBPKG/Payload" | cpio -idm )
 
 FRAMEWORK_PAYLOAD=""
 while IFS= read -r cand; do
@@ -106,10 +137,12 @@ while IFS= read -r cand; do
         FRAMEWORK_PAYLOAD="$cand"
         break
     fi
-done < <(find "$EXPAND_DIR" -type d -name "Python.framework")
+done < <(find "$PAYLOAD_DIR" -type d -name "Python.framework")
 
 if [ -z "$FRAMEWORK_PAYLOAD" ]; then
-    echo "✗ Could not find a usable Python.framework inside the installer package."
+    echo "✗ Payload decompressed but no usable Python.framework was found inside it."
+    echo "  Contents of $PAYLOAD_DIR:"
+    find "$PAYLOAD_DIR" -maxdepth 3
     exit 1
 fi
 cp -R "$FRAMEWORK_PAYLOAD" "$FRAMEWORKS_DIR/Python.framework"
