@@ -285,10 +285,6 @@ HTML = r"""<!DOCTYPE html>
     <p class="sub" id="liveModel"></p>
     <div class="bar">
       <div class="seg" id="liveFormat"></div>
-      <div class="toggle-row">
-        <label class="toggle"><input type="checkbox" id="autoInsert"><span class="slider"></span></label>
-        <span class="lbl">Auto-insert into the app you're typing in</span>
-      </div>
     </div>
     <p class="sub" id="liveStatus">Ready — click Start Recording to begin</p>
     <div class="live-text empty" id="liveText">Transcript will appear here…</div>
@@ -408,7 +404,7 @@ HTML = r"""<!DOCTYPE html>
   function closeLive() { if (STATE.recording) api().live_stop(); document.getElementById('liveOverlay').classList.remove('show'); }
   function toggleRec() {
     if (STATE.recording) { api().live_stop(); }
-    else { api().live_start(STATE.liveFmt, document.getElementById('autoInsert').checked); }
+    else { api().live_start(STATE.liveFmt); }
   }
   function liveCopy()  { var t = document.getElementById('liveText'); navigator.clipboard && navigator.clipboard.writeText(t.textContent); liveStatus('Copied to clipboard.'); }
   function liveClear() { api().live_clear(); setLiveText(''); document.getElementById('liveSaveBtn').disabled = true; }
@@ -970,7 +966,7 @@ class Api:
     CHUNK_SECS = 10
     SAMPLE_RATE = 16000
 
-    def live_start(self, fmt, auto_insert):
+    def live_start(self, fmt):
         missing = []
         for mod in ("sounddevice", "mlx_whisper"):
             try:
@@ -982,7 +978,6 @@ class Api:
                      "Missing: " + " ".join(missing) + " — run Setup / Repair.")
             return
         self._live_fmt = fmt if fmt in LIVE_OUTPUT_FORMATS else "txt"
-        self._live_auto = bool(auto_insert)
         self._live_recording = True
         self._live_stop.clear()
         self._js("setRecording", True)
@@ -1032,7 +1027,16 @@ class Api:
 
     def _transcribe_chunk(self, audio):
         import mlx_whisper
+        import numpy as np
         if len(audio) < self.SAMPLE_RATE * 0.5:
+            return
+        # Whisper hallucinates repeated phrases — often literally looping
+        # the last thing actually said — when fed near-silent audio. This
+        # is a well-documented model failure mode, not a decoding bug.
+        # Most likely to hit the short trailing chunk after Stop, which is
+        # often mostly silence/pause. Gate on average amplitude before
+        # ever handing the chunk to the model.
+        if float(np.abs(audio).mean()) < 0.006:
             return
         try:
             result = mlx_whisper.transcribe(
@@ -1042,35 +1046,8 @@ class Api:
                 sep = " " if self._live_transcript else ""
                 self._live_transcript += sep + text
                 self._js("setLiveText", self._live_transcript)
-                if self._live_auto:
-                    self._paste_into_front_app(text + " ")
         except Exception as exc:
             self._js("liveStatus", f"Transcription error: {exc}")
-
-    def _own_app_is_frontmost(self):
-        try:
-            from AppKit import NSWorkspace
-            front = NSWorkspace.sharedWorkspace().frontmostApplication()
-            return front is not None and front.processIdentifier() == os.getpid()
-        except Exception:
-            return False
-
-    def _paste_into_front_app(self, text):
-        if self._own_app_is_frontmost():
-            return
-        try:
-            subprocess.run(["/usr/bin/pbcopy"], input=text.encode("utf-8"),
-                           timeout=5, check=True)
-            r = subprocess.run(
-                ["/usr/bin/osascript", "-e",
-                 'tell application "System Events" to keystroke "v" using command down'],
-                capture_output=True, text=True, timeout=10)
-            if r.returncode != 0:
-                self._js("liveStatus",
-                         "Auto-insert blocked — allow Whisper Transcriber in System "
-                         "Settings → Privacy &amp; Security → Accessibility.")
-        except Exception as exc:
-            self._js("liveStatus", f"Auto-insert error: {exc}")
 
     def live_save(self, fmt):
         text = self._live_transcript.strip()
