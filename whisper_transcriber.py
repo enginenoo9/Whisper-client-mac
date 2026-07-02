@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from datetime import datetime
 
@@ -857,43 +858,54 @@ class Api:
                 return cand
         return None
 
-    def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env):
-        cli_fmt, remove_txt = ("txt", True) if fmt in ("pdf", "docx") else (fmt, False)
+    def _run_mlx_cli(self, mlx_exe, file_path, model, out_dir, cli_fmt, env):
         cmd = [mlx_exe, file_path, "--model", model,
-               "--output-dir", outdir, "--output-format", cli_fmt]
+               "--output-dir", out_dir, "--output-format", cli_fmt]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, env=env)
         for line in proc.stdout:
             self._log(line.rstrip())
         proc.wait()
-        if proc.returncode != 0:
-            return False
+        return proc.returncode == 0
 
+    def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env):
         base = os.path.splitext(os.path.basename(file_path))[0]
-        txt_path = os.path.join(outdir, base + ".txt")
 
-        if self.cleanup and cli_fmt == "txt" and os.path.exists(txt_path):
-            try:
-                with open(txt_path, encoding="utf-8") as f:
-                    original = f.read()
-                with open(txt_path, "w", encoding="utf-8") as f:
-                    f.write(self._reflow_text(original))
+        if fmt in ("pdf", "docx"):
+            # mlx_whisper always names its text output "<base>.txt" — if we
+            # asked it to write that straight into outdir, it would collide
+            # with (silently overwrite, then delete) any real standalone
+            # .txt output already sitting there for this file. Generate the
+            # intermediate text in an isolated scratch dir instead, so it
+            # can never touch a real file in the user's chosen folder.
+            with tempfile.TemporaryDirectory() as tmpdir:
+                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, "txt", env):
+                    return False
+                tmp_txt = os.path.join(tmpdir, base + ".txt")
+                if not os.path.exists(tmp_txt):
+                    return False
+                with open(tmp_txt, encoding="utf-8") as f:
+                    text = f.read()
+            if self.cleanup:
+                text = self._reflow_text(text)
                 self._log("✓ Cleaned up line breaks in transcript.")
-            except Exception as e:
-                self._log(f"(Could not clean up text: {e})")
+            return (self._write_pdf(text, base, outdir) if fmt == "pdf"
+                    else self._write_docx(text, base, outdir))
 
-        if fmt in ("pdf", "docx") and os.path.exists(txt_path):
-            with open(txt_path, encoding="utf-8") as f:
-                text = f.read()
-            if fmt == "pdf":
-                self._write_pdf(text, base, outdir)
-            else:
-                self._write_docx(text, base, outdir)
-            if remove_txt:
+        # txt / srt / vtt: mlx_whisper writes directly into outdir.
+        if not self._run_mlx_cli(mlx_exe, file_path, model, outdir, fmt, env):
+            return False
+        if self.cleanup and fmt == "txt":
+            txt_path = os.path.join(outdir, base + ".txt")
+            if os.path.exists(txt_path):
                 try:
-                    os.remove(txt_path)
-                except OSError:
-                    pass
+                    with open(txt_path, encoding="utf-8") as f:
+                        original = f.read()
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(self._reflow_text(original))
+                    self._log("✓ Cleaned up line breaks in transcript.")
+                except Exception as e:
+                    self._log(f"(Could not clean up text: {e})")
         return True
 
     # ── Batch transcription ───────────────────────────────────────────────────
