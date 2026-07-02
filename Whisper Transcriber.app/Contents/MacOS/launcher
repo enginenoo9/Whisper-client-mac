@@ -19,6 +19,17 @@ BOOTSTRAP="$BUNDLE_DIR/Contents/Resources/bootstrap.py"
 FRAMEWORK_PY="$BUNDLE_DIR/Contents/Frameworks/Python.framework/Versions/Current/bin/python3"
 
 if [ -x "$FRAMEWORK_PY" ]; then
+    # install_name_tool (used by build-dmg.sh to relocate the framework)
+    # only fixes dyld library-load paths. Tcl's own search for init.tcl is a
+    # separate mechanism that isn't touched by that — left alone, _tkinter
+    # falls back to a compiled-in default of /Library/Frameworks/Python.
+    # framework/..., which doesn't exist here, and Tk() raises TclError.
+    # Point it at the real bundled location instead. This is inherited by
+    # bootstrap.py's own process and, since it copies os.environ before
+    # exec'ing into the venv Python, by the final app process too.
+    FW_VERSION_DIR="$BUNDLE_DIR/Contents/Frameworks/Python.framework/Versions/Current"
+    export TCL_LIBRARY="$FW_VERSION_DIR/lib/tcl8.6"
+    export TK_LIBRARY="$FW_VERSION_DIR/lib/tk8.6"
     exec "$FRAMEWORK_PY" "$BOOTSTRAP" "$BUNDLE_DIR"
 fi
 

@@ -26,11 +26,21 @@ jobs:
         run: |
           set -euo pipefail
           APP="dist/Whisper Transcriber.app"
-          FW_PY="$APP/Contents/Frameworks/Python.framework/Versions/Current/bin/python3"
+          FW_VERSION_DIR="$APP/Contents/Frameworks/Python.framework/Versions/Current"
+          FW_PY="$FW_VERSION_DIR/bin/python3"
 
           test -x "$FW_PY"
           "$FW_PY" --version
-          "$FW_PY" -c "import tkinter; import venv"
+          "$FW_PY" -c "import venv"
+
+          # `import tkinter` alone doesn't initialize Tcl — it doesn't call
+          # Tk_Init()/Tcl_CreateInterp() until you construct Tk(), so it
+          # can't catch a broken/unrelocated init.tcl path. Actually
+          # construct a window, with the same TCL_LIBRARY/TK_LIBRARY the
+          # launcher sets, to catch that class of bug.
+          TCL_LIBRARY="$FW_VERSION_DIR/lib/tcl8.6" \
+          TK_LIBRARY="$FW_VERSION_DIR/lib/tk8.6" \
+          "$FW_PY" -c "import tkinter; tkinter.Tk()"
 
           test -x "$APP/Contents/Resources/bin/ffmpeg"
           "$APP/Contents/Resources/bin/ffmpeg" -version | head -1
