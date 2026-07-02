@@ -304,8 +304,8 @@ HTML = r"""<!DOCTYPE html>
   <div class="modal">
     <h2>Clean up</h2>
     <p class="sub" id="cleanupInfo">Checking disk usage…</p>
+    <div class="filelist" id="modelList" style="height: auto; max-height: 180px; margin-bottom: 14px;"></div>
     <div class="foot" style="flex-direction: column; align-items: stretch; gap: 8px;">
-      <button class="btn block" onclick="deleteModels()">Delete downloaded models</button>
       <button class="btn block" onclick="uninstallAll()">Uninstall everything (models + packages)</button>
       <button class="btn ghost block" onclick="closeCleanup()">Cancel</button>
     </div>
@@ -411,12 +411,30 @@ HTML = r"""<!DOCTYPE html>
   function liveSave()  { api().live_save(STATE.liveFmt); }
 
   // Cleanup
-  function openCleanup()  { document.getElementById('cleanupOverlay').classList.add('show');
-                            api().cleanup_info().then(function (s) {
-                              document.getElementById('cleanupInfo').textContent =
-                                s.count + ' model(s) downloaded — about ' + s.size + ' on disk.'; }).catch(reportErr); }
+  function openCleanup()  { document.getElementById('cleanupOverlay').classList.add('show'); refreshCleanup(); }
+  function refreshCleanup() {
+    api().cleanup_info().then(function (s) {
+      document.getElementById('cleanupInfo').textContent =
+        s.count + ' model(s) downloaded — about ' + s.size + ' on disk.';
+      renderModelList(s.models);
+    }).catch(reportErr);
+  }
+  function renderModelList(models) {
+    var box = document.getElementById('modelList'); box.innerHTML = '';
+    var installed = models.filter(function (m) { return m.installed; });
+    if (!installed.length) { box.innerHTML = '<div class="empty">No models downloaded</div>'; return; }
+    installed.forEach(function (m) {
+      var d = document.createElement('div'); d.className = 'item';
+      d.innerHTML = '<span class="name" style="flex:1">' + escapeHtml(m.label) + '</span>';
+      var b = document.createElement('button'); b.className = 'btn ghost small';
+      b.textContent = 'Delete';
+      b.onclick = function () { deleteModel(m.index); };
+      d.appendChild(b);
+      box.appendChild(d);
+    });
+  }
+  function deleteModel(index) { api().delete_model(index).then(refreshCleanup).catch(reportErr); }
   function closeCleanup() { document.getElementById('cleanupOverlay').classList.remove('show'); }
-  function deleteModels() { closeCleanup(); api().delete_models(); }
   function uninstallAll() { if (confirm('Remove ALL models and Python packages, then quit?')) api().uninstall_everything(); }
 
   // ── Push targets (called from Python) ──
@@ -663,6 +681,9 @@ class Api:
         return [os.path.join(cache, nm) for nm in os.listdir(cache)
                 if nm.startswith("models--mlx-community--whisper")]
 
+    def _model_dir_for(self, repo):
+        return os.path.join(self._hf_cache_dir(), "models--" + repo.replace("/", "--"))
+
     @staticmethod
     def _human_size(n):
         n = float(n)
@@ -672,35 +693,53 @@ class Api:
             n /= 1024
         return f"{n:.1f} GB"
 
-    def _disk_usage_models(self):
+    @staticmethod
+    def _dir_size(d):
         total = 0
-        for d in self._model_dirs():
-            for root, _dirs, files in os.walk(d):
-                for fn in files:
-                    fp = os.path.join(root, fn)
-                    try:
-                        if not os.path.islink(fp):
-                            total += os.path.getsize(fp)
-                    except OSError:
-                        pass
+        for root, _dirs, files in os.walk(d):
+            for fn in files:
+                fp = os.path.join(root, fn)
+                try:
+                    if not os.path.islink(fp):
+                        total += os.path.getsize(fp)
+                except OSError:
+                    pass
         return total
+
+    def _disk_usage_models(self):
+        return sum(self._dir_size(d) for d in self._model_dirs())
 
     def cleanup_info(self):
         return {"count": len(self._model_dirs()),
-                "size": self._human_size(self._disk_usage_models())}
+                "size": self._human_size(self._disk_usage_models()),
+                "models": self.installed_models()}
 
-    def delete_models(self):
+    def installed_models(self):
+        out = []
+        for i, (label, repo) in enumerate(MODELS):
+            d = self._model_dir_for(repo)
+            installed = os.path.isdir(d)
+            out.append({"index": i, "label": label, "installed": installed,
+                        "size": self._human_size(self._dir_size(d)) if installed else None})
+        return out
+
+    def delete_model(self, index):
+        index = int(index)
+        if not (0 <= index < len(MODELS)):
+            return
+        label, repo = MODELS[index]
+        d = self._model_dir_for(repo)
+
         def _do():
-            removed = 0
-            for d in self._model_dirs():
+            if os.path.isdir(d):
                 try:
                     shutil.rmtree(d)
-                    removed += 1
+                    self._log(f"✓ Deleted {label} from cache.")
+                    self._status("Model deleted — it'll re-download when next used.")
                 except Exception as e:
-                    self._log(f"(could not remove {os.path.basename(d)}: {e})")
-            self._log(f"✓ Deleted {removed} model(s) from cache.")
-            self._status("Models deleted — they'll re-download when next used.")
-            self.set_model(self.model_index)  # refresh download button
+                    self._log(f"(could not remove {label}: {e})")
+            if index == self.model_index:
+                self.set_model(self.model_index)  # refresh download button
         threading.Thread(target=_do, daemon=True).start()
 
     def uninstall_everything(self):
