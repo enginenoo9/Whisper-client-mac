@@ -234,17 +234,20 @@ with the system Python.
 
 ## How it works
 
-- The GUI is a tkinter Python app (`whisper_transcriber.py`), styled with
-  `ttkbootstrap` (flat, modern widget rendering — Tk's native macOS theme
-  uses pre-Big-Sur bezel styles, and its synthetic themes have widgets that
-  resist recoloring, so ttkbootstrap draws its own instead of using either).
+- The GUI (`whisper_transcriber.py`) is an HTML/CSS/JS front-end rendered in a
+  native macOS WebView via `pywebview`. Tkinter can't produce a modern-looking
+  Mac app no matter how it's themed (its widget rendering tops out at a dated
+  look), so the presentation layer is web tech and all the real work stays in
+  Python, exposed to the page through pywebview's JS bridge.
 - `Contents/MacOS/launcher` (bash) picks a Python interpreter — the bundled
   `Python.framework` if this was built with `build-dmg.sh`, otherwise a
   Homebrew Python for source installs — and hands off to `bootstrap.py`.
 - `bootstrap.py` creates a private venv at `~/Whisper/venv`, installs
   `mlx-whisper` and friends into it (skipped on subsequent launches once
   everything's already there), then execs into that venv to run the GUI.
-  The GUI calls the `mlx_whisper` CLI via subprocess for each file.
+  The GUI calls the `mlx_whisper` CLI via subprocess for each file. (The
+  one-time setup progress window in `bootstrap.py` is still plain tkinter —
+  it runs under the bundled framework Python before pywebview is installed.)
 - MLX runs Whisper models accelerated by Apple's GPU via the Metal framework.
 - `ffmpeg` decodes audio (bundled in the DMG, or via Homebrew for source
   installs). Whisper transcribes it. Everything stays on your Mac.

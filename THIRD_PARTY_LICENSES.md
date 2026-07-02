@@ -26,7 +26,7 @@ Distribution depends on how you got the app:
 | `sounddevice` | Microphone capture | MIT | https://github.com/spatialaudio/python-sounddevice |
 | PortAudio (via `sounddevice`) | Audio I/O backend | MIT-style | https://www.portaudio.com |
 | `pyobjc-framework-Cocoa` | Corrects the macOS menu bar app name + forces light appearance | MIT | https://github.com/ronaldoussoren/pyobjc |
-| `ttkbootstrap` | Modern flat-style GUI theme | MIT | https://github.com/israel-dryer/ttkbootstrap |
+| `pywebview` | Renders the GUI (HTML/CSS in a native WebView) | BSD-3-Clause | https://github.com/r0x0r/pywebview |
 | Python & Tkinter (Tcl/Tk) | Runtime & GUI | PSF / BSD-style | https://www.python.org |
 | **`fpdf2`** | PDF output | **LGPL-3.0** | https://github.com/py-pdf/fpdf2 |
 | **ffmpeg** | Audio/video decoding | **LGPL-2.1+ / GPL** (build-dependent) | https://ffmpeg.org |
