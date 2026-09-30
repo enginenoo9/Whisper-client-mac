@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -563,10 +564,16 @@ class Api:
     def set_model(self, index):
         self.model_index = int(index)
         self._save_config()
-        self._js("setDownloadBtn",
-                 {"enabled": False, "text": "Downloaded ✓"}
-                 if self._model_is_cached(self._current_model()[1])
-                 else {"enabled": True, "text": "Download"})
+        repo = self._current_model()[1]
+        if self._downloading == repo:
+            btn = {"enabled": False, "text": "Downloading…"}
+        elif self._model_is_cached(repo):
+            btn = {"enabled": False, "text": "Downloaded ✓"}
+        else:
+            # Only one download at a time (download_model ignores clicks
+            # while one is running), so don't offer the button until then.
+            btn = {"enabled": not self._downloading, "text": "Download"}
+        self._js("setDownloadBtn", btn)
 
     def set_format(self, fmt):
         if fmt in OUTPUT_FORMATS:
@@ -821,33 +828,78 @@ class Api:
         if not self.mlx_installed:
             self._log("✗ Install mlx-whisper first (click Install Now).")
             return
+        if self._downloading:
+            return
         label, repo = self._current_model()
-        self._downloading = True
+        name = label.split("—")[0].strip()
+        self._downloading = repo
         self._js("setDownloadBtn", {"enabled": False, "text": "Downloading…"})
-        self._status(f"Downloading {label.split('—')[0].strip()} model…")
+        self._status(f"Downloading {name} model…")
         self._log(f"\n→ Downloading model: {repo}")
-        self._log("  (cached after first download; large models take a while)")
 
         def _do():
-            code = ("from huggingface_hub import snapshot_download;"
-                    f"snapshot_download(repo_id='{repo}')")
-            proc = subprocess.Popen([sys.executable, "-c", code],
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True)
-            for line in proc.stdout:
-                if line.strip():
-                    self._log(line.rstrip())
-            proc.wait()
+            # In-process rather than a pip-style subprocess: huggingface_hub's
+            # tqdm bars redraw with \r, which came out as mangled lines in
+            # the log, and its "set a HF_TOKEN" warning read like an error
+            # (public models don't need a token). Silence both and report
+            # progress in the status line instead, measured the same way the
+            # setup window does it (see DOWNLOAD_SCRIPT in bootstrap.py).
+            try:
+                from huggingface_hub import HfApi, snapshot_download
+                from huggingface_hub.utils import disable_progress_bars
+                from huggingface_hub.utils import logging as hf_logging
+                disable_progress_bars()
+                hf_logging.set_verbosity_error()
+                info = HfApi().model_info(repo, files_metadata=True)
+                total = sum(s.size or 0 for s in info.siblings)
+                baseline = self._cache_bytes()
+                err = []
+
+                def run():
+                    try:
+                        snapshot_download(repo_id=repo)
+                    except Exception as exc:
+                        err.append(exc)
+
+                t = threading.Thread(target=run, daemon=True)
+                t.start()
+                while t.is_alive():
+                    done = min(max(self._cache_bytes() - baseline, 0), total)
+                    if total and self._current_model()[1] == repo:
+                        self._js("setDownloadBtn", {"enabled": False,
+                                 "text": f"Downloading {done * 100 // total}%"})
+                    self._status(f"Downloading {name} model — "
+                                 f"{self._human_size(done)} of {self._human_size(total)}")
+                    t.join(0.5)
+                if err:
+                    raise err[0]
+            except Exception as exc:
+                self._downloading = False
+                self._log(f"✗ Model download failed: {exc}")
+                self._status("Model download failed — check your internet connection.")
+                self.set_model(self.model_index)  # refresh download button
+                return
             self._downloading = False
-            if proc.returncode == 0:
-                self._log("✓ Model ready.")
-                self._status("Model downloaded and ready.")
-                self._js("setDownloadBtn", {"enabled": False, "text": "Downloaded ✓"})
-            else:
-                self._log("✗ Model download failed — see log above.")
-                self._status("Model download failed.")
-                self._js("setDownloadBtn", {"enabled": True, "text": "Download"})
+            self._log("✓ Model ready.")
+            self._status(f"{name} model downloaded and ready.")
+            self.set_model(self.model_index)  # refresh download button
         threading.Thread(target=_do, daemon=True).start()
+
+    def _cache_bytes(self):
+        """Total bytes in the HF cache, each file counted once (symlinks
+        skipped, hardlinks deduplicated) so it works for both the old
+        per-model layout and huggingface_hub 2.0's shared blob store."""
+        n, seen = 0, set()
+        for root, _dirs, files in os.walk(self._hf_cache_dir()):
+            for f in files:
+                try:
+                    st = os.lstat(os.path.join(root, f))
+                except OSError:
+                    continue
+                if stat.S_ISREG(st.st_mode) and (st.st_dev, st.st_ino) not in seen:
+                    seen.add((st.st_dev, st.st_ino))
+                    n += st.st_size
+        return n
 
     # ── Text helpers ──────────────────────────────────────────────────────────
 
