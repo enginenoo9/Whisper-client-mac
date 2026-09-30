@@ -139,6 +139,19 @@ HTML = r"""<!DOCTYPE html>
   .btn.ghost:hover { background: rgba(0,113,227,.08); }
   .btn.block { width: 100%; }
 
+  .filecol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  /* Grows with its contents (a dropped folder can add dozens of files),
+     then scrolls. The cap keeps the whole page inside the default window
+     height, so the footer never scrolls out of view. */
+  #filelist { height: auto; min-height: 116px; max-height: 172px; }
+  .row.top { align-items: start; }
+  .row.top > label.key { padding-top: 9px; }
+  .filemeta { display: none; align-items: center; justify-content: space-between;
+              color: var(--muted); font-size: 12px; padding: 0 4px; }
+  .filemeta.show { display: flex; }
+  .linkbtn { border: none; background: none; padding: 0; font: inherit; font-size: 12px;
+             color: var(--accent); cursor: pointer; }
+  .linkbtn:hover { text-decoration: underline; }
   .filelist {
     flex: 1; height: 116px; overflow-y: auto;
     border: 1px solid var(--border); border-radius: 10px; background: var(--field);
@@ -154,8 +167,18 @@ HTML = r"""<!DOCTYPE html>
     display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px;
     font-size: 13px; cursor: default;
   }
-  .filelist .item.sel { background: var(--accent); color: #fff; }
   .filelist .item .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #filelist .item:hover { background: #f2f2f4; }
+  #filelist .item .name { flex: 0 1 auto; }
+  #filelist .item .folder { flex: 1 1 0; min-width: 40px; color: var(--muted); font-size: 12px;
+                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #filelist .item .rm {
+    flex: none; width: 20px; height: 20px; border: none; border-radius: 50%; padding: 0;
+    background: transparent; color: #6e6e73; font-size: 16px; line-height: 20px;
+    cursor: pointer; opacity: 0; transition: opacity .1s, background .1s;
+  }
+  #filelist .item:hover .rm, #filelist .item .rm:focus-visible { opacity: 1; }
+  #filelist .item .rm:hover { background: #e3e3e6; color: var(--text); }
   .filebtns { display: flex; flex-direction: column; gap: 6px; }
 
   .path { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden;
@@ -254,14 +277,18 @@ HTML = r"""<!DOCTYPE html>
       </div>
     </div>
 
-    <div class="row">
+    <div class="row top">
       <label class="key">Files</label>
       <div class="val" style="align-items: stretch;">
-        <div class="filelist" id="filelist"></div>
+        <div class="filecol">
+          <div class="filelist" id="filelist"></div>
+          <div class="filemeta" id="filemeta">
+            <span id="filecount"></span>
+            <button class="linkbtn" onclick="clearFiles()">Clear all</button>
+          </div>
+        </div>
         <div class="filebtns">
           <button class="btn small" onclick="addFiles()">Add Files…</button>
-          <button class="btn small" onclick="removeFiles()">Remove</button>
-          <button class="btn small" onclick="clearFiles()">Clear All</button>
         </div>
       </div>
     </div>
@@ -341,7 +368,7 @@ HTML = r"""<!DOCTYPE html>
 
 <script>
   var STATE = { models: [], formats: [], liveFormats: [], format: "txt",
-                cleanup: true, modelIndex: 1, sel: [], recording: false };
+                cleanup: true, modelIndex: 1, recording: false };
 
   function api() { return window.pywebview.api; }
 
@@ -390,21 +417,25 @@ HTML = r"""<!DOCTYPE html>
       box.appendChild(b);
     });
   }
-  function renderFiles(names) {
-    STATE.files = names; STATE.sel = [];
+  // rows: [{name, folder, path}] from Api._file_rows().
+  function renderFiles(rows) {
+    STATE.files = rows;
     var box = document.getElementById('filelist'); box.innerHTML = '';
-    if (!names.length) { box.innerHTML = '<div class="empty">Drop audio or video files here</div>'; return; }
-    names.forEach(function (n, i) {
-      var d = document.createElement('div'); d.className = 'item';
-      d.innerHTML = '<span class="name">' + escapeHtml(n) + '</span>';
-      d.onclick = function () { toggleSel(i, d); };
+    var meta = document.getElementById('filemeta');
+    meta.classList.toggle('show', rows.length > 0);
+    document.getElementById('filecount').textContent =
+      rows.length + (rows.length === 1 ? ' file' : ' files');
+    if (!rows.length) { box.innerHTML = '<div class="empty">Drop audio or video files here</div>'; return; }
+    rows.forEach(function (r, i) {
+      var d = document.createElement('div'); d.className = 'item'; d.title = r.path;
+      d.innerHTML = '<span class="name">' + escapeHtml(r.name) + '</span>' +
+                    '<span class="folder">' + escapeHtml(r.folder) + '</span>';
+      var x = document.createElement('button'); x.className = 'rm'; x.textContent = '×';
+      x.title = 'Remove'; x.setAttribute('aria-label', 'Remove ' + r.name + ' (' + r.folder + ')');
+      x.onclick = function () { removeFile(i); };
+      d.appendChild(x);
       box.appendChild(d);
     });
-  }
-  function toggleSel(i, el) {
-    var p = STATE.sel.indexOf(i);
-    if (p >= 0) { STATE.sel.splice(p, 1); el.classList.remove('sel'); }
-    else { STATE.sel.push(i); el.classList.add('sel'); }
   }
   // Drag and drop. The drop itself is handled in Python (Api.bind_drop),
   // which is the only place the files' full paths are available. Here we
@@ -441,7 +472,7 @@ HTML = r"""<!DOCTYPE html>
   function onCleanup() { STATE.cleanup = document.getElementById('cleanup').checked; api().set_cleanup(STATE.cleanup); }
 
   function addFiles()    { api().add_files().then(renderFiles).catch(reportErr); }
-  function removeFiles() { api().remove_files(STATE.sel).then(renderFiles).catch(reportErr); }
+  function removeFile(i) { api().remove_files([i]).then(renderFiles).catch(reportErr); }
   function clearFiles()  { api().clear_files().then(renderFiles).catch(reportErr); }
   function chooseOutdir(){ api().choose_outdir().then(function (p) { document.getElementById('outdir').textContent = p; }).catch(reportErr); }
   function downloadModel(){ api().download_model(); }
@@ -633,9 +664,24 @@ class Api:
                 webview.FileDialog.OPEN, allow_multiple=True, file_types=types)
         except Exception as exc:
             self._log(f"✗ Couldn't open file picker: {exc}")
-            return [os.path.basename(p) for p in self._file_queue]
+            return self._file_rows()
         self._queue_files(result or [])
-        return [os.path.basename(p) for p in self._file_queue]
+        return self._file_rows()
+
+    def _file_rows(self):
+        """What the page shows for each queued file: its name, the folder
+        it's in (so two "audio.m4a" rows from different folders can be told
+        apart), and the full path, with ~ for the home folder, for the
+        hover tooltip."""
+        home = os.path.expanduser("~")
+        rows = []
+        for p in self._file_queue:
+            parent = os.path.dirname(p)
+            short = "~" + p[len(home):] if p.startswith(home + os.sep) else p
+            rows.append({"name": os.path.basename(p),
+                         "folder": "Home" if parent == home else os.path.basename(parent),
+                         "path": short})
+        return rows
 
     def _queue_files(self, paths):
         added = 0
@@ -676,7 +722,7 @@ class Api:
             else:
                 skipped += 1
         added = self._queue_files(media)
-        self._js("renderFiles", [os.path.basename(p) for p in self._file_queue])
+        self._js("renderFiles", self._file_rows())
         if skipped:
             self._log(f"(Skipped {skipped} dropped file{'s' if skipped != 1 else ''}"
                       f" that {'aren’t' if skipped != 1 else 'isn’t'} audio or video.)")
@@ -692,12 +738,12 @@ class Api:
             if 0 <= i < len(self._file_queue):
                 del self._file_queue[i]
         self._refresh_transcribe()
-        return [os.path.basename(p) for p in self._file_queue]
+        return self._file_rows()
 
     def clear_files(self):
         self._file_queue.clear()
         self._refresh_transcribe()
-        return []
+        return self._file_rows()
 
     def choose_outdir(self):
         try:
