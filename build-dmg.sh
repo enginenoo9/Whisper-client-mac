@@ -3,8 +3,8 @@
 # build-dmg.sh — Build a standalone, drag-to-install Whisper Transcriber.dmg.
 #
 # Bundles a real Python.framework (from python.org) and a static ffmpeg
-# binary directly into the .app, so the *build machine* needs Homebrew and
-# internet access, but the *end user* needs neither — no Homebrew, no
+# binary directly into the .app, so the *build machine* needs internet
+# access, but the *end user* doesn't — no Homebrew, no
 # separate Python install, no Terminal popup on first launch.
 #
 # mlx-whisper itself still can't be statically bundled: it's a namespace
@@ -16,8 +16,9 @@
 #
 # Requirements to BUILD this DMG (not to run the resulting app):
 #   - macOS with Xcode Command Line Tools (for codesign)
-#   - Homebrew, with ffmpeg installed (`brew install ffmpeg`)
+#   - python3 with pip (to fetch the imageio-ffmpeg wheel)
 #   - Internet access, to download the official python.org installer
+#     and the ffmpeg wheel from PyPI
 #
 # Usage:
 #   chmod +x build-dmg.sh
@@ -29,13 +30,16 @@
 #
 set -euo pipefail
 
-VERSION="3.1"
+VERSION="3.2"
 APP_NAME="Whisper Transcriber"
 DMG_NAME="Whisper-Transcriber-${VERSION}"
 
 # Bump this to pick up a newer Python. Must be a released "macOS 64-bit
 # universal2 installer" build — check https://www.python.org/downloads/macos/
 PYTHON_VERSION="3.12.8"
+
+# Source of the bundled standalone ffmpeg binary (see step 3).
+IMAGEIO_FFMPEG_VERSION="0.6.0"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$ROOT_DIR/.build-dmg"
@@ -49,10 +53,6 @@ echo ""
 # ── 0. Preflight ──────────────────────────────────────────────────────────────
 if [[ "$(uname)" != "Darwin" ]]; then
     echo "✗ This script must run on macOS (needs pkgutil, hdiutil, codesign)."
-    exit 1
-fi
-if ! command -v brew >/dev/null 2>&1; then
-    echo "✗ Homebrew is required at build time (for ffmpeg). Install from https://brew.sh"
     exit 1
 fi
 if ! command -v codesign >/dev/null 2>&1; then
@@ -120,20 +120,31 @@ rm -f "$FW_VERSION_DIR"/bin/python3*-intel64
 
 echo "  Bundled: $("$FW_PYTHON" --version)"
 
-# ── 3. Stage ffmpeg (from Homebrew, build machine only) ──────────────────────
-echo "→ Staging ffmpeg…"
-FFMPEG_SRC=""
-for cand in "$(brew --prefix 2>/dev/null)/bin/ffmpeg" /opt/homebrew/bin/ffmpeg /usr/local/bin/ffmpeg; do
-    if [ -x "$cand" ]; then FFMPEG_SRC="$cand"; break; fi
-done
+# ── 3. Stage a self-contained ffmpeg ─────────────────────────────────────────
+# Homebrew's ffmpeg can't be used here: it's dynamically linked against
+# libav*.dylib files under /opt/homebrew/Cellar, so a copied binary only runs
+# on Macs that happen to have Homebrew's ffmpeg installed too. The
+# imageio-ffmpeg wheel on PyPI ships a standalone arm64 build that links only
+# against macOS system libraries — pull the binary out of that instead.
+echo "→ Staging ffmpeg (imageio-ffmpeg ${IMAGEIO_FFMPEG_VERSION})…"
+FFMPEG_DL="$BUILD_DIR/imageio-ffmpeg"
+python3 -m pip download "imageio-ffmpeg==${IMAGEIO_FFMPEG_VERSION}" \
+    --no-deps --only-binary=:all: --platform macosx_11_0_arm64 \
+    --dest "$FFMPEG_DL" --quiet
+unzip -q -o "$FFMPEG_DL"/imageio_ffmpeg-*.whl "imageio_ffmpeg/binaries/*" -d "$FFMPEG_DL"
+FFMPEG_SRC="$(find "$FFMPEG_DL/imageio_ffmpeg/binaries" -name 'ffmpeg-macos-aarch64-*' -type f | head -1)"
 if [ -z "$FFMPEG_SRC" ]; then
-    echo "  ffmpeg not found — installing via Homebrew…"
-    brew install ffmpeg
-    FFMPEG_SRC="$(brew --prefix)/bin/ffmpeg"
+    echo "✗ No arm64 ffmpeg binary found in the imageio-ffmpeg wheel."
+    exit 1
 fi
 cp "$FFMPEG_SRC" "$RESOURCES_DIR/bin/ffmpeg"
 chmod +x "$RESOURCES_DIR/bin/ffmpeg"
-echo "  Staged: $FFMPEG_SRC → Contents/Resources/bin/ffmpeg"
+# Guard against ever shipping a binary that depends on non-system libraries.
+if otool -L "$RESOURCES_DIR/bin/ffmpeg" | tail -n +2 | grep -vE '^[[:space:]]+/(usr/lib|System/Library)/'; then
+    echo "✗ Staged ffmpeg links against non-system libraries (listed above)."
+    exit 1
+fi
+echo "  Staged: $(basename "$FFMPEG_SRC") → Contents/Resources/bin/ffmpeg"
 
 # ── 4. Strip unused x86_64 code ───────────────────────────────────────────────
 # This app only ever runs on Apple Silicon — mlx/mlx-whisper have no x86_64
@@ -160,8 +171,8 @@ echo "  Verifying framework still works after thinning…"
 # ── 5. Ad-hoc code sign ───────────────────────────────────────────────────────
 # No Apple Developer ID cert is configured for this project, so this is an
 # ad-hoc signature only. It satisfies Gatekeeper on the build machine; on any
-# other Mac, recipients need to right-click → Open the first time (see
-# README). A paid Apple Developer Program membership would allow full
+# other Mac, recipients need to approve it once via System Settings →
+# Privacy & Security → Open Anyway (see README). A paid Apple Developer Program membership would allow full
 # notarization and remove that step.
 echo "→ Signing .app (ad-hoc)…"
 codesign --force --deep --sign - "$APP_DST"
@@ -196,7 +207,7 @@ echo "    required — mlx-whisper installs itself into a"
 echo "    private venv on first launch."
 echo ""
 echo "  First-launch note (no Apple Developer cert):"
-echo "    macOS will show 'unidentified developer'."
-echo "    Right-click the app → Open → Open to bypass"
-echo "    (needed only once per Mac)."
+echo "    macOS will block the first launch. Recipients"
+echo "    click Done, then System Settings → Privacy &"
+echo "    Security → Open Anyway (needed once per Mac)."
 echo "==================================================="

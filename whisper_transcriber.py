@@ -35,7 +35,26 @@ MODELS = [
 OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
 LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
-CONFIG_PATH = os.path.expanduser("~/Whisper/whisper_transcriber_config.json")
+# Keep these in sync with bootstrap.py and setup.command.
+#
+# mlx-whisper declares a dependency on torch, but only its model-conversion
+# script uses it — transcription never imports it. torch (plus sympy, which
+# it pulls in) is ~500 MB, about half the whole environment. So mlx-whisper
+# is installed with --no-deps, pinned so a new release can't quietly start
+# needing something that isn't listed, and its real runtime dependencies are
+# listed here instead.
+MLX_WHISPER_PACKAGE = "mlx-whisper==0.4.3"
+REQUIRED_PACKAGES = ["mlx", "numba", "numpy", "scipy", "tiktoken", "tqdm",
+                     "more-itertools", "huggingface_hub",
+                     "fpdf2", "python-docx", "sounddevice",
+                     "pyobjc-framework-Cocoa", "pywebview"]
+
+PDF_UNICODE_FONTS = [
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+]
+
+CONFIG_PATH =os.path.expanduser("~/Whisper/whisper_transcriber_config.json")
 DEFAULT_MODEL_INDEX = 1
 
 
@@ -476,6 +495,7 @@ class Api:
         self.mlx_installed = False
         self.is_running = False
         self._downloading = False
+        self._repairing = False
         # Live state
         self._live_recording = False
         self._live_stop = threading.Event()
@@ -632,20 +652,33 @@ class Api:
             self._status("mlx-whisper not installed — click Install Now.")
         self._refresh_transcribe()
 
+    def _pip_install_all(self):
+        """Install/upgrade every runtime package, streaming pip's output to
+        the log. Returns True on success."""
+        pip = [sys.executable, "-m", "pip", "install", "--upgrade"]
+        for cmd in (pip + REQUIRED_PACKAGES, pip + ["--no-deps", MLX_WHISPER_PACKAGE]):
+            self._log("→ " + " ".join(cmd[2:]))
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                if line.strip():
+                    self._log(line.rstrip())
+            proc.wait()
+            if proc.returncode != 0:
+                return False
+        return True
+
     def install_mlx(self):
         self._status("Installing mlx-whisper — this may take a minute…")
 
         def _do():
-            self._log("→ pip install mlx-whisper")
-            r = subprocess.run([sys.executable, "-m", "pip", "install", "mlx-whisper"],
-                               capture_output=True, text=True)
-            if r.returncode == 0:
+            if self._pip_install_all():
                 self.mlx_installed = True
                 self._js("setInstallDone")
                 self._log("✓ Installed successfully.")
                 self._status("Ready.")
             else:
-                self._log("✗ Failed:\n" + r.stderr[:500])
+                self._log("✗ Install failed — see log above.")
                 self._status("Installation failed — see log.")
                 self._js("setInstallRetry")
             self._refresh_transcribe()
@@ -674,15 +707,33 @@ class Api:
                         return True
         return False
 
-    def _model_dirs(self):
-        cache = self._hf_cache_dir()
-        if not os.path.isdir(cache):
-            return []
-        return [os.path.join(cache, nm) for nm in os.listdir(cache)
-                if nm.startswith("models--mlx-community--whisper")]
+    # Sizes and deletion go through huggingface_hub's own cache scanner
+    # rather than walking models--*/ folders directly: huggingface_hub 2.0
+    # moved file contents into a shared hub/blobs/ store that the per-model
+    # folders only link to, so deleting a model's folder left its gigabytes
+    # behind and measuring it reported a few KB. The scanner understands
+    # both layouts.
 
-    def _model_dir_for(self, repo):
-        return os.path.join(self._hf_cache_dir(), "models--" + repo.replace("/", "--"))
+    def _scan_cache(self):
+        try:
+            from huggingface_hub import scan_cache_dir
+            return scan_cache_dir(self._hf_cache_dir())
+        except Exception:
+            return None  # no cache yet, or huggingface_hub not installed
+
+    @staticmethod
+    def _whisper_repos(info):
+        if info is None:
+            return []
+        return [r for r in info.repos
+                if r.repo_type == "model" and r.repo_id.startswith("mlx-community/whisper")]
+
+    def _delete_cached(self, repo_ids):
+        info = self._scan_cache()
+        hashes = [rev.commit_hash for r in self._whisper_repos(info)
+                  if r.repo_id in repo_ids for rev in r.revisions]
+        if hashes:
+            info.delete_revisions(*hashes).execute()
 
     @staticmethod
     def _human_size(n):
@@ -693,58 +744,39 @@ class Api:
             n /= 1024
         return f"{n:.1f} GB"
 
-    @staticmethod
-    def _dir_size(d):
-        total = 0
-        for root, _dirs, files in os.walk(d):
-            for fn in files:
-                fp = os.path.join(root, fn)
-                try:
-                    if not os.path.islink(fp):
-                        total += os.path.getsize(fp)
-                except OSError:
-                    pass
-        return total
-
-    def _disk_usage_models(self):
-        return sum(self._dir_size(d) for d in self._model_dirs())
-
     def cleanup_info(self):
-        return {"count": len(self._model_dirs()),
-                "size": self._human_size(self._disk_usage_models()),
-                "models": self.installed_models()}
-
-    def installed_models(self):
-        out = []
+        repos = {r.repo_id: r for r in self._whisper_repos(self._scan_cache())}
+        models = []
         for i, (label, repo) in enumerate(MODELS):
-            d = self._model_dir_for(repo)
-            installed = os.path.isdir(d)
-            out.append({"index": i, "label": label, "installed": installed,
-                        "size": self._human_size(self._dir_size(d)) if installed else None})
-        return out
+            r = repos.get(repo)
+            models.append({"index": i, "label": label, "installed": r is not None,
+                           "size": self._human_size(r.size_on_disk) if r else None})
+        return {"count": len(repos),
+                "size": self._human_size(sum(r.size_on_disk for r in repos.values())),
+                "models": models}
 
     def delete_model(self, index):
+        # Synchronous on purpose: the Clean up list re-reads the cache as
+        # soon as this call returns, so deleting in a background thread
+        # could refresh the list before the model was actually gone.
         index = int(index)
         if not (0 <= index < len(MODELS)):
             return
         label, repo = MODELS[index]
-        d = self._model_dir_for(repo)
-
-        def _do():
-            if os.path.isdir(d):
-                try:
-                    shutil.rmtree(d)
-                    self._log(f"✓ Deleted {label} from cache.")
-                    self._status("Model deleted — it'll re-download when next used.")
-                except Exception as e:
-                    self._log(f"(could not remove {label}: {e})")
-            if index == self.model_index:
-                self.set_model(self.model_index)  # refresh download button
-        threading.Thread(target=_do, daemon=True).start()
+        try:
+            self._delete_cached({repo})
+            self._log(f"✓ Deleted {label} from cache.")
+            self._status("Model deleted — it'll re-download when next used.")
+        except Exception as e:
+            self._log(f"(could not remove {label}: {e})")
+        if index == self.model_index:
+            self.set_model(self.model_index)  # refresh download button
 
     def uninstall_everything(self):
-        for d in self._model_dirs():
-            shutil.rmtree(d, ignore_errors=True)
+        try:
+            self._delete_cached({r.repo_id for r in self._whisper_repos(self._scan_cache())})
+        except Exception:
+            pass
         try:
             os.remove(CONFIG_PATH)
         except OSError:
@@ -760,14 +792,28 @@ class Api:
     # ── Setup / repair ────────────────────────────────────────────────────────
 
     def run_setup(self):
-        here = os.path.expanduser("~/Whisper")
-        for cand in (os.path.join(here, "setup.command"),):
-            if os.path.exists(cand):
-                subprocess.run(["open", cand])
-                self._log(f"→ Launched setup: {cand}")
-                self._status("Setup opened in Terminal — follow the prompts there.")
-                return
-        self._log("✗ setup.command not found (expected in ~/Whisper).")
+        # Repairs the venv in place with this same interpreter. This used to
+        # open ~/Whisper/setup.command in Terminal, but DMG installs never
+        # get that file (it's only copied from next to the .app, which in
+        # /Applications has no siblings) and it requires Homebrew anyway —
+        # so for most users the button did nothing.
+        if self._repairing or self.is_running:
+            return
+        self._repairing = True
+        self._status("Repairing — reinstalling packages…")
+        self._log("\n→ Repairing installation…")
+
+        def _do():
+            ok = self._pip_install_all()
+            self._repairing = False
+            if ok:
+                self._log("✓ Repair complete. Quit and reopen the app to load the updated packages.")
+                self._status("Repair complete — restart the app.")
+                self._check_install()
+            else:
+                self._log("✗ Repair failed — see log above. Check your internet connection.")
+                self._status("Repair failed — see log.")
+        threading.Thread(target=_do, daemon=True).start()
 
     # ── Model download ────────────────────────────────────────────────────────
 
@@ -833,10 +879,20 @@ class Api:
             pdf.set_auto_page_break(auto=True, margin=20)
             pdf.add_page()
             pdf.set_margins(20, 20, 20)
-            pdf.set_font("Helvetica", "B", 14)
+            # fpdf2's built-in Helvetica is Latin-1 only — a single curly
+            # apostrophe or any non-English transcript raises. Embed a
+            # Unicode TTF that ships with macOS instead; it has no bold
+            # face, so the title is just set larger.
+            font = next((p for p in PDF_UNICODE_FONTS if os.path.exists(p)), None)
+            if font:
+                pdf.add_font("Body", fname=font)
+                title_font, body_font = ("Body", ""), ("Body", "")
+            else:
+                title_font, body_font = ("Helvetica", "B"), ("Helvetica", "")
+            pdf.set_font(*title_font, size=14)
             pdf.cell(0, 10, base, new_x="LMARGIN", new_y="NEXT")
             pdf.ln(4)
-            pdf.set_font("Helvetica", size=11)
+            pdf.set_font(*body_font, size=11)
             for para in text.split("\n\n"):
                 if para.strip():
                     pdf.multi_cell(0, 6, para.strip())
@@ -1039,23 +1095,35 @@ class Api:
         import numpy as np
         import time
         buffer, last = [], time.monotonic()
+        lock = threading.Lock()
 
         def cb(indata, frames, tinfo, status):
-            buffer.append(indata[:, 0].copy())
+            with lock:
+                buffer.append(indata[:, 0].copy())
+
+        def take():
+            # The audio callback runs on PortAudio's own thread. Without the
+            # lock, a block appended between concatenating the buffer and
+            # clearing it would be silently dropped.
+            with lock:
+                blocks = buffer[:]
+                buffer.clear()
+            return np.concatenate(blocks) if blocks else None
 
         try:
             with sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1,
                                 dtype="float32", callback=cb):
                 while not self._live_stop.is_set():
                     now = time.monotonic()
-                    if now - last >= self.CHUNK_SECS and buffer:
-                        chunk = np.concatenate(buffer)
-                        buffer.clear()
+                    if now - last >= self.CHUNK_SECS:
+                        chunk = take()
                         last = now
-                        self._transcribe_chunk(chunk)
+                        if chunk is not None:
+                            self._transcribe_chunk(chunk)
                     time.sleep(0.1)
-                if buffer:
-                    self._transcribe_chunk(np.concatenate(buffer))
+            chunk = take()
+            if chunk is not None:
+                self._transcribe_chunk(chunk)
         except Exception as exc:
             self._js("liveStatus", f"Audio error: {exc}")
 
@@ -1095,12 +1163,20 @@ class Api:
         fmt = fmt if fmt in LIVE_OUTPUT_FORMATS else "txt"
         base = "live_transcript_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         if fmt == "txt":
-            with open(os.path.join(self.outdir, base + ".txt"), "w", encoding="utf-8") as f:
-                f.write(text)
+            try:
+                with open(os.path.join(self.outdir, base + ".txt"), "w", encoding="utf-8") as f:
+                    f.write(text)
+                ok = True
+            except OSError as exc:
+                self._log(f"✗ Couldn't save transcript: {exc}")
+                ok = False
         elif fmt == "pdf":
-            self._write_pdf(text, base, self.outdir)
-        elif fmt == "docx":
-            self._write_docx(text, base, self.outdir)
+            ok = self._write_pdf(text, base, self.outdir)
+        else:
+            ok = self._write_docx(text, base, self.outdir)
+        if not ok:
+            self._js("liveStatus", "Save failed — see the log in the main window.")
+            return
         self._js("liveStatus", f"Saved: {base}.{fmt}")
         subprocess.run(["open", self.outdir])
 

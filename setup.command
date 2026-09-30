@@ -60,7 +60,13 @@ else
 fi
 echo "→ Installing / updating mlx-whisper…"
 "$WHISPER_DIR/venv/bin/pip" install --upgrade pip >/dev/null
-"$WHISPER_DIR/venv/bin/pip" install --upgrade mlx-whisper fpdf2 python-docx sounddevice pyobjc-framework-Cocoa pywebview
+# mlx-whisper goes in with --no-deps: its declared torch dependency (~500 MB)
+# is never used for transcription. Its real dependencies are listed instead.
+# Keep in sync with REQUIRED_PACKAGES in whisper_transcriber.py.
+"$WHISPER_DIR/venv/bin/pip" install --upgrade \
+    mlx numba numpy scipy tiktoken tqdm more-itertools huggingface_hub \
+    fpdf2 python-docx sounddevice pyobjc-framework-Cocoa pywebview
+"$WHISPER_DIR/venv/bin/pip" install --upgrade --no-deps "mlx-whisper==0.4.3"
 echo ""
 
 # --- 4. Place app files in ~/Whisper (predictable launcher paths) -----------

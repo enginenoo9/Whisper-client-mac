@@ -15,13 +15,19 @@ land in your chosen folder automatically.
 and drag **Whisper Transcriber** into your **Applications** folder. No Homebrew,
 no Python install, nothing to run in Terminal.
 
-1. Open the app from Applications.
-2. macOS will say it's from an "unidentified developer" (this project isn't
-   signed with a paid Apple Developer certificate) — **right-click the app →
-   Open → Open**. You only need to do this once.
-3. First launch shows a short **Setting up…** progress window (installs
-   mlx-whisper into a private folder, ~1–2 minutes). Every launch after that
-   is instant.
+1. Open the app from Applications. macOS will block it the first time with
+   **"Whisper Transcriber" Not Opened** (this project isn't signed with a paid
+   Apple Developer certificate). Click **Done** — not Move to Trash.
+2. Open **System Settings → Privacy & Security**, scroll down to the
+   *Security* section, and click **Open Anyway** next to the message about
+   Whisper Transcriber. Confirm with **Open Anyway** and your password or
+   Touch ID. You only need to do this once per Mac.
+   (The old right-click → Open shortcut no longer works as of macOS 15
+   Sequoia.)
+3. First launch shows a **Setting up…** window. Pick a transcription model
+   (Medium is a good default) — setup installs mlx-whisper into a private
+   folder and downloads that model, a few minutes in total depending on your
+   connection. Every launch after that is instant.
 
 The DMG bundles its own Python and ffmpeg, so there's genuinely nothing else
 to install. See [Building the DMG](#building-the-dmg) if you want to build it
@@ -61,8 +67,8 @@ then confirm with `brew --version`. Then open the app — it handles the rest.
 
 ## Building the DMG
 
-Requires macOS, Homebrew (`brew install ffmpeg`), Xcode Command Line Tools, and
-internet access (to download Python from python.org):
+Requires macOS, Xcode Command Line Tools, `python3` with pip, and internet
+access (to download Python from python.org and ffmpeg from PyPI):
 
 ```
 ./build-dmg.sh
@@ -74,7 +80,9 @@ extracts `Python.framework` and rewrites its binaries so they work from
 inside an app bundle instead of only from `/Library/Frameworks/` — the
 official installer's framework is hard-coded to that one absolute path, so
 copying it as-is crashes at launch. No system-wide Python install happens.
-The script then stages a copy of Homebrew's `ffmpeg`, removes the standalone
+The script then stages a standalone `ffmpeg` from the `imageio-ffmpeg` wheel
+(Homebrew's can't be used — it depends on Homebrew's own libraries, so it
+only runs on Macs that have them), removes the standalone
 x86_64-only `python3.12-intel64` binary python.org ships alongside the
 universal one (unneeded — nothing here supports Intel), strips the unused
 x86_64 slice from every remaining bundled binary (this app is Apple
@@ -95,9 +103,10 @@ script on a macOS runner and uploads the DMG as a build artifact — trigger it
 manually from the Actions tab, or push a `v*` tag.
 
 **No Apple Developer certificate is configured**, so the build is only
-ad-hoc signed. Recipients see "unidentified developer" and need to
-right-click → Open once. A $99/year Apple Developer Program membership would
-allow full notarization and remove that step.
+ad-hoc signed. Recipients have to approve it once via System Settings →
+Privacy & Security → **Open Anyway** (see [Install](#install)). A $99/year
+Apple Developer Program membership would allow full notarization and remove
+that step.
 
 ---
 
@@ -183,18 +192,25 @@ macOS will prompt for microphone permission on first use.
 
 ## Troubleshooting
 
-**"Whisper Transcriber can't be opened because it is from an unidentified developer"**
-Right-click the app → **Open** → **Open**. Only needed once per Mac (no paid
-Apple Developer certificate is configured for this project).
+**"Whisper Transcriber" Not Opened / "Apple could not verify…"**
+Click **Done**, then go to System Settings → Privacy & Security and click
+**Open Anyway** (see [Install](#install)). Only needed once per Mac (no paid
+Apple Developer certificate is configured for this project). If the Open
+Anyway button doesn't appear, you can instead clear the download quarantine
+flag in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Whisper Transcriber.app"
+```
 
 **First launch shows a "Setting up…" window that doesn't finish**
 Needs internet access to install mlx-whisper the first time. Check your
-connection and reopen the app to retry.
+connection and reopen the app to retry. If only the model download fails,
+setup still finishes — download the model from the app's **Download** button.
 
 **"ffmpeg not found" in the log**
 DMG installs bundle their own ffmpeg — reinstall from a fresh DMG if this
-happens. Source installs: run **Setup / Repair…**, which installs it via
-Homebrew.
+happens. Source installs: `brew install ffmpeg`.
 
 **"Homebrew Python not found" dialog**
 Only relevant to the run-from-source path. Install Homebrew and run
