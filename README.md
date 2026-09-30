@@ -121,9 +121,9 @@ that step.
 3. **Files** — drag audio/video files (or whole folders) onto the window, or
    click **Add Files…**, to queue one or more files. Files that share a name
    get numbered transcripts (`audio.txt`, `audio (2).txt`) so none overwrite
-   each other.
-   Select multiple at once with Shift- or Command-click. Remove individual
-   files with **Remove** or the Delete key. **Clear All** empties the queue.
+   each other. Each file shows the folder it's in (hover for the full path).
+   Hover over a file and click **×** to remove it, or **Clear all** to empty
+   the queue.
 4. **Save to** — defaults to your Desktop.
 5. **Format** — choose your output:
    - `TXT` — plain text transcript
