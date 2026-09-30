@@ -35,7 +35,16 @@ MODELS = [
 OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
 LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
-CONFIG_PATH = os.path.expanduser("~/Whisper/whisper_transcriber_config.json")
+# Keep in sync with REQUIRED_PACKAGES in the .app's bootstrap.py.
+REQUIRED_PACKAGES = ["mlx-whisper", "fpdf2", "python-docx", "sounddevice",
+                     "pyobjc-framework-Cocoa", "pywebview"]
+
+PDF_UNICODE_FONTS = [
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+]
+
+CONFIG_PATH =os.path.expanduser("~/Whisper/whisper_transcriber_config.json")
 DEFAULT_MODEL_INDEX = 1
 
 
@@ -476,6 +485,7 @@ class Api:
         self.mlx_installed = False
         self.is_running = False
         self._downloading = False
+        self._repairing = False
         # Live state
         self._live_recording = False
         self._live_stop = threading.Event()
@@ -760,14 +770,34 @@ class Api:
     # ── Setup / repair ────────────────────────────────────────────────────────
 
     def run_setup(self):
-        here = os.path.expanduser("~/Whisper")
-        for cand in (os.path.join(here, "setup.command"),):
-            if os.path.exists(cand):
-                subprocess.run(["open", cand])
-                self._log(f"→ Launched setup: {cand}")
-                self._status("Setup opened in Terminal — follow the prompts there.")
-                return
-        self._log("✗ setup.command not found (expected in ~/Whisper).")
+        # Repairs the venv in place with this same interpreter. This used to
+        # open ~/Whisper/setup.command in Terminal, but DMG installs never
+        # get that file (it's only copied from next to the .app, which in
+        # /Applications has no siblings) and it requires Homebrew anyway —
+        # so for most users the button did nothing.
+        if self._repairing or self.is_running:
+            return
+        self._repairing = True
+        self._status("Repairing — reinstalling packages…")
+        self._log("\n→ pip install --upgrade " + " ".join(REQUIRED_PACKAGES))
+
+        def _do():
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "pip", "install", "--upgrade"] + REQUIRED_PACKAGES,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                if line.strip():
+                    self._log(line.rstrip())
+            proc.wait()
+            self._repairing = False
+            if proc.returncode == 0:
+                self._log("✓ Repair complete. Quit and reopen the app to load the updated packages.")
+                self._status("Repair complete — restart the app.")
+                self._check_install()
+            else:
+                self._log("✗ Repair failed — see log above. Check your internet connection.")
+                self._status("Repair failed — see log.")
+        threading.Thread(target=_do, daemon=True).start()
 
     # ── Model download ────────────────────────────────────────────────────────
 
@@ -833,10 +863,20 @@ class Api:
             pdf.set_auto_page_break(auto=True, margin=20)
             pdf.add_page()
             pdf.set_margins(20, 20, 20)
-            pdf.set_font("Helvetica", "B", 14)
+            # fpdf2's built-in Helvetica is Latin-1 only — a single curly
+            # apostrophe or any non-English transcript raises. Embed a
+            # Unicode TTF that ships with macOS instead; it has no bold
+            # face, so the title is just set larger.
+            font = next((p for p in PDF_UNICODE_FONTS if os.path.exists(p)), None)
+            if font:
+                pdf.add_font("Body", fname=font)
+                title_font, body_font = ("Body", ""), ("Body", "")
+            else:
+                title_font, body_font = ("Helvetica", "B"), ("Helvetica", "")
+            pdf.set_font(*title_font, size=14)
             pdf.cell(0, 10, base, new_x="LMARGIN", new_y="NEXT")
             pdf.ln(4)
-            pdf.set_font("Helvetica", size=11)
+            pdf.set_font(*body_font, size=11)
             for para in text.split("\n\n"):
                 if para.strip():
                     pdf.multi_cell(0, 6, para.strip())
@@ -1039,23 +1079,35 @@ class Api:
         import numpy as np
         import time
         buffer, last = [], time.monotonic()
+        lock = threading.Lock()
 
         def cb(indata, frames, tinfo, status):
-            buffer.append(indata[:, 0].copy())
+            with lock:
+                buffer.append(indata[:, 0].copy())
+
+        def take():
+            # The audio callback runs on PortAudio's own thread. Without the
+            # lock, a block appended between concatenating the buffer and
+            # clearing it would be silently dropped.
+            with lock:
+                blocks = buffer[:]
+                buffer.clear()
+            return np.concatenate(blocks) if blocks else None
 
         try:
             with sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1,
                                 dtype="float32", callback=cb):
                 while not self._live_stop.is_set():
                     now = time.monotonic()
-                    if now - last >= self.CHUNK_SECS and buffer:
-                        chunk = np.concatenate(buffer)
-                        buffer.clear()
+                    if now - last >= self.CHUNK_SECS:
+                        chunk = take()
                         last = now
-                        self._transcribe_chunk(chunk)
+                        if chunk is not None:
+                            self._transcribe_chunk(chunk)
                     time.sleep(0.1)
-                if buffer:
-                    self._transcribe_chunk(np.concatenate(buffer))
+            chunk = take()
+            if chunk is not None:
+                self._transcribe_chunk(chunk)
         except Exception as exc:
             self._js("liveStatus", f"Audio error: {exc}")
 
@@ -1095,12 +1147,20 @@ class Api:
         fmt = fmt if fmt in LIVE_OUTPUT_FORMATS else "txt"
         base = "live_transcript_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         if fmt == "txt":
-            with open(os.path.join(self.outdir, base + ".txt"), "w", encoding="utf-8") as f:
-                f.write(text)
+            try:
+                with open(os.path.join(self.outdir, base + ".txt"), "w", encoding="utf-8") as f:
+                    f.write(text)
+                ok = True
+            except OSError as exc:
+                self._log(f"✗ Couldn't save transcript: {exc}")
+                ok = False
         elif fmt == "pdf":
-            self._write_pdf(text, base, self.outdir)
-        elif fmt == "docx":
-            self._write_docx(text, base, self.outdir)
+            ok = self._write_pdf(text, base, self.outdir)
+        else:
+            ok = self._write_docx(text, base, self.outdir)
+        if not ok:
+            self._js("liveStatus", "Save failed — see the log in the main window.")
+            return
         self._js("liveStatus", f"Saved: {base}.{fmt}")
         subprocess.run(["open", self.outdir])
 

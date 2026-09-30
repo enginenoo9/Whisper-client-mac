@@ -61,8 +61,8 @@ then confirm with `brew --version`. Then open the app — it handles the rest.
 
 ## Building the DMG
 
-Requires macOS, Homebrew (`brew install ffmpeg`), Xcode Command Line Tools, and
-internet access (to download Python from python.org):
+Requires macOS, Xcode Command Line Tools, `python3` with pip, and internet
+access (to download Python from python.org and ffmpeg from PyPI):
 
 ```
 ./build-dmg.sh
@@ -74,7 +74,9 @@ extracts `Python.framework` and rewrites its binaries so they work from
 inside an app bundle instead of only from `/Library/Frameworks/` — the
 official installer's framework is hard-coded to that one absolute path, so
 copying it as-is crashes at launch. No system-wide Python install happens.
-The script then stages a copy of Homebrew's `ffmpeg`, removes the standalone
+The script then stages a standalone `ffmpeg` from the `imageio-ffmpeg` wheel
+(Homebrew's can't be used — it depends on Homebrew's own libraries, so it
+only runs on Macs that have them), removes the standalone
 x86_64-only `python3.12-intel64` binary python.org ships alongside the
 universal one (unneeded — nothing here supports Intel), strips the unused
 x86_64 slice from every remaining bundled binary (this app is Apple

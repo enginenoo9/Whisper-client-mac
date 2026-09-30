@@ -21,6 +21,7 @@ from tkinter import messagebox, ttk
 BG, TEXT, MUTED = "#f5f5f7", "#1d1d1f", "#86868b"
 LOG_BG, LOG_FG = "#1e1e1e", "#d4d4d4"
 
+# Keep in sync with REQUIRED_PACKAGES in whisper_transcriber.py (Setup / Repair).
 REQUIRED_PACKAGES = ["mlx-whisper", "fpdf2", "python-docx", "sounddevice",
                      "pyobjc-framework-Cocoa", "pywebview"]
 IMPORT_CHECK = "import mlx_whisper, fpdf, docx, sounddevice, Foundation, webview"

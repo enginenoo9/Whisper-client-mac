@@ -6,8 +6,10 @@ Distribution depends on how you got the app:
 
 - **DMG builds** (via `build-dmg.sh`) bundle two third-party components
   directly: **CPython + Tcl/Tk** (as `Python.framework`, downloaded from the
-  official python.org installer) and **ffmpeg** (a compiled binary, staged
-  from Homebrew at build time). Both ship as unmodified, separate executables
+  official python.org installer) and **ffmpeg** (a standalone compiled
+  binary, taken at build time from the
+  [`imageio-ffmpeg`](https://github.com/imageio/imageio-ffmpeg) wheel on
+  PyPI). Both ship as unmodified, separate executables
   invoked via subprocess — not linked into this project's own code — and each
   remains under its own license below.
 - All other dependencies (`mlx-whisper`, `fpdf2`, `python-docx`,
@@ -36,11 +38,12 @@ Distribution depends on how you got the app:
 
 These two are not MIT-licensed.
 
-- **ffmpeg** — LGPL-2.1-or-later / GPL (Homebrew's build is typically GPL,
-  depending on which encoders are enabled — check the `configuration:` line
-  in `ffmpeg -version` for the exact build). In DMG builds it ships as an
-  unmodified binary invoked as a separate subprocess (mere aggregation, not
-  a derivative work), the same way Homebrew already distributes it. In
+- **ffmpeg** — LGPL-2.1-or-later / GPL depending on which encoders are
+  enabled (the imageio-ffmpeg build bundled in DMGs is configured with
+  `--enable-gpl`; check the `configuration:` line in `ffmpeg -version` for
+  the exact build). In DMG builds it ships as an unmodified binary invoked as
+  a separate subprocess (mere aggregation, not a derivative work), the same
+  way imageio-ffmpeg itself redistributes it. In
   source installs it's installed via Homebrew directly, so the redistribution
   obligations fall on Homebrew. See https://ffmpeg.org/legal.html. If you plan
   to distribute this app commercially, verify your ffmpeg build's exact

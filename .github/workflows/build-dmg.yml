@@ -16,9 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install ffmpeg (build-time dependency)
-        run: brew install ffmpeg
-
       - name: Build DMG
         run: ./build-dmg.sh
 
@@ -57,6 +54,13 @@ jobs:
 
           test -x "$APP/Contents/Resources/bin/ffmpeg"
           "$APP/Contents/Resources/bin/ffmpeg" -version | head -1
+          # The runner itself may have Homebrew libraries lying around, so
+          # "-version runs" alone doesn't prove the binary is portable.
+          if otool -L "$APP/Contents/Resources/bin/ffmpeg" | tail -n +2 \
+              | grep -vE '^[[:space:]]+/(usr/lib|System/Library)/'; then
+            echo "✗ Bundled ffmpeg depends on non-system libraries (listed above)"
+            exit 1
+          fi
 
           codesign --verify --deep --strict "$APP"
 
