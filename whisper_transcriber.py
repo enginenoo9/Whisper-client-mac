@@ -33,6 +33,8 @@ MODELS = [
     ("Small — Fast (~460 MB)",             "mlx-community/whisper-small-mlx"),
     ("Base — Fastest (~145 MB)",           "mlx-community/whisper-base-mlx"),
 ]
+MEDIA_EXTENSIONS = ["mp3", "mp4", "m4a", "wav", "flac", "aac", "ogg", "mkv", "webm",
+                    "mov", "aiff", "aif", "opus", "wma", "m4v", "avi", "caf"]
 OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
 LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
@@ -143,6 +145,11 @@ HTML = r"""<!DOCTYPE html>
     padding: 6px;
   }
   .filelist .empty { color: var(--muted); font-size: 13px; padding: 34px 10px; text-align: center; }
+  #filelist { transition: border-color .12s, background .12s; }
+  body.dragging #filelist {
+    border: 2px dashed var(--accent); background: rgba(0,113,227,.06); padding: 5px;
+  }
+  body.dragging #filelist .empty { color: var(--accent); }
   .filelist .item {
     display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px;
     font-size: 13px; cursor: default;
@@ -386,7 +393,7 @@ HTML = r"""<!DOCTYPE html>
   function renderFiles(names) {
     STATE.files = names; STATE.sel = [];
     var box = document.getElementById('filelist'); box.innerHTML = '';
-    if (!names.length) { box.innerHTML = '<div class="empty">No files added yet</div>'; return; }
+    if (!names.length) { box.innerHTML = '<div class="empty">Drop audio or video files here</div>'; return; }
     names.forEach(function (n, i) {
       var d = document.createElement('div'); d.className = 'item';
       d.innerHTML = '<span class="name">' + escapeHtml(n) + '</span>';
@@ -399,6 +406,33 @@ HTML = r"""<!DOCTYPE html>
     if (p >= 0) { STATE.sel.splice(p, 1); el.classList.remove('sel'); }
     else { STATE.sel.push(i); el.classList.add('sel'); }
   }
+  // Drag and drop. The drop itself is handled in Python (Api.bind_drop),
+  // which is the only place the files' full paths are available. Here we
+  // just highlight the file list while something is dragged over the
+  // window, and cancel dragover — without that, WebKit ignores the drop,
+  // or navigates to the dropped file and replaces the whole UI with it.
+  // dragenter/dragleave fire for every child element crossed, so count them.
+  (function () {
+    var depth = 0;
+    function isFiles(e) { return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'Files') >= 0; }
+    document.addEventListener('dragenter', function (e) {
+      if (!isFiles(e)) return;
+      depth++; document.body.classList.add('dragging');
+    });
+    document.addEventListener('dragleave', function (e) {
+      if (!isFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) document.body.classList.remove('dragging');
+    });
+    document.addEventListener('dragover', function (e) {
+      if (!isFiles(e)) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('drop', function () {
+      depth = 0; document.body.classList.remove('dragging');
+    });
+  })();
+
   function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
   function onModel()   { STATE.modelIndex = parseInt(document.getElementById('model').value, 10);
@@ -592,7 +626,7 @@ class Api:
         # previous "Audio / Video Files") fails that regex and raises
         # ValueError before the dialog even opens, which silently killed
         # this button (JS called it with .then() and no .catch()).
-        types = ("Media Files (*.mp3;*.mp4;*.m4a;*.wav;*.flac;*.aac;*.ogg;*.mkv;*.webm)",
+        types = ("Media Files (" + ";".join("*." + e for e in MEDIA_EXTENSIONS) + ")",
                  "All files (*.*)")
         try:
             result = self.window.create_file_dialog(
@@ -600,12 +634,58 @@ class Api:
         except Exception as exc:
             self._log(f"✗ Couldn't open file picker: {exc}")
             return [os.path.basename(p) for p in self._file_queue]
-        if result:
-            for p in result:
-                if p not in self._file_queue:
-                    self._file_queue.append(p)
-        self._refresh_transcribe()
+        self._queue_files(result or [])
         return [os.path.basename(p) for p in self._file_queue]
+
+    def _queue_files(self, paths):
+        added = 0
+        for p in paths:
+            if p not in self._file_queue:
+                self._file_queue.append(p)
+                added += 1
+        self._refresh_transcribe()
+        return added
+
+    # ── Drag and drop ─────────────────────────────────────────────────────────
+
+    def bind_drop(self):
+        """Called once the page has loaded. WKWebView only hands over the
+        full paths of dropped files when the drop is handled from Python —
+        a drop listener in the page's own JS only sees bare file names."""
+        try:
+            from webview.dom import DOMEventHandler
+            self.window.dom.document.events.drop += DOMEventHandler(
+                self._on_drop, prevent_default=True, stop_propagation=True)
+        except Exception as exc:
+            self._log(f"(Drag and drop unavailable: {exc} — use Add Files… instead.)")
+
+    def _on_drop(self, event):
+        files = (event.get("dataTransfer") or {}).get("files") or []
+        dropped = [f.get("pywebviewFullPath") for f in files]
+        media, skipped = [], 0
+        for p in filter(None, dropped):
+            # Folders are searched for media files, including subfolders.
+            if os.path.isdir(p):
+                for root, dirs, names in os.walk(p):
+                    dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                    for nm in sorted(names):
+                        if self._is_media(nm):
+                            media.append(os.path.join(root, nm))
+            elif self._is_media(p):
+                media.append(p)
+            else:
+                skipped += 1
+        added = self._queue_files(media)
+        self._js("renderFiles", [os.path.basename(p) for p in self._file_queue])
+        if skipped:
+            self._log(f"(Skipped {skipped} dropped file{'s' if skipped != 1 else ''}"
+                      f" that {'aren’t' if skipped != 1 else 'isn’t'} audio or video.)")
+        if not added and not skipped:
+            self._status("No new audio or video files in what was dropped.")
+
+    @staticmethod
+    def _is_media(path):
+        return os.path.splitext(path)[1].lower().lstrip(".") in MEDIA_EXTENSIONS
 
     def remove_files(self, indices):
         for i in sorted((int(x) for x in indices), reverse=True):
@@ -1001,8 +1081,8 @@ class Api:
                 return cand
         return None
 
-    def _run_mlx_cli(self, mlx_exe, file_path, model, out_dir, cli_fmt, env):
-        cmd = [mlx_exe, file_path, "--model", model,
+    def _run_mlx_cli(self, mlx_exe, file_path, model, out_dir, cli_fmt, env, base):
+        cmd = [mlx_exe, file_path, "--model", model, "--output-name", base,
                "--output-dir", out_dir, "--output-format", cli_fmt]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, env=env)
@@ -1011,18 +1091,35 @@ class Api:
         proc.wait()
         return proc.returncode == 0
 
-    def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env):
-        base = os.path.splitext(os.path.basename(file_path))[0]
+    @staticmethod
+    def _output_names(files):
+        """Output base name for each queued file, unique within the batch.
+        Transcripts are all written to one folder as "<name>.<format>", so
+        two files that share a name — "Meeting 1/audio.m4a" and
+        "Meeting 2/audio.m4a", or "talk.mp3" and "talk.mp4" — would
+        otherwise overwrite each other; later ones become "audio (2)" etc.
+        Compared case-insensitively, like the macOS filesystem."""
+        used, names = set(), []
+        for path in files:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            name, k = stem, 1
+            while name.lower() in used:
+                k += 1
+                name = f"{stem} ({k})"
+            used.add(name.lower())
+            names.append(name)
+        return names
 
+    def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env, base):
         if fmt in ("pdf", "docx"):
-            # mlx_whisper always names its text output "<base>.txt" — if we
-            # asked it to write that straight into outdir, it would collide
-            # with (silently overwrite, then delete) any real standalone
-            # .txt output already sitting there for this file. Generate the
-            # intermediate text in an isolated scratch dir instead, so it
-            # can never touch a real file in the user's chosen folder.
+            # If mlx_whisper wrote its "<base>.txt" straight into outdir, it
+            # would collide with (silently overwrite, then delete) any real
+            # standalone .txt output already sitting there for this file.
+            # Generate the intermediate text in an isolated scratch dir
+            # instead, so it can never touch a real file in the user's
+            # chosen folder.
             with tempfile.TemporaryDirectory() as tmpdir:
-                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, "txt", env):
+                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, "txt", env, base):
                     return False
                 tmp_txt = os.path.join(tmpdir, base + ".txt")
                 if not os.path.exists(tmp_txt):
@@ -1036,7 +1133,7 @@ class Api:
                     else self._write_docx(text, base, outdir))
 
         # txt / srt / vtt: mlx_whisper writes directly into outdir.
-        if not self._run_mlx_cli(mlx_exe, file_path, model, outdir, fmt, env):
+        if not self._run_mlx_cli(mlx_exe, file_path, model, outdir, fmt, env, base):
             return False
         if self.cleanup and fmt == "txt":
             txt_path = os.path.join(outdir, base + ".txt")
@@ -1082,15 +1179,16 @@ class Api:
                 return
 
             failed = []
-            for i, file_path in enumerate(files, 1):
+            bases = self._output_names(files)
+            for i, (file_path, base) in enumerate(zip(files, bases), 1):
                 name = os.path.basename(file_path)
                 self._log(f"\n[{i}/{n}] {name}")
                 self._log(f"  Model : {model}")
                 self._log(f"  Format: {fmt}  →  {outdir}")
                 self._status(f"[{i}/{n}] Transcribing {name}…")
-                ok = self._transcribe_via_cli(file_path, model, outdir, fmt, mlx_exe, env)
+                ok = self._transcribe_via_cli(file_path, model, outdir, fmt, mlx_exe, env, base)
                 if ok:
-                    self._log(f"✓ Saved to: {outdir}")
+                    self._log(f"✓ Saved to: {os.path.join(outdir, base + '.' + fmt)}")
                 else:
                     self._log("✗ Failed.")
                     failed.append(name)
@@ -1268,6 +1366,7 @@ def main():
         width=700, height=880, min_size=(640, 720),
         background_color="#f5f5f7")
     api.window = window
+    window.events.loaded += api.bind_drop
     webview.start()
 
 

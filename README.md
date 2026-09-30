@@ -118,7 +118,10 @@ that step.
    - *Medium* — great balance, default (~1.5 GB)
    - *Small* — fast (~460 MB)
    - *Base* — fastest (~145 MB)
-3. **Files** — click **Add Files…** to queue one or more audio/video files.
+3. **Files** — drag audio/video files (or whole folders) onto the window, or
+   click **Add Files…**, to queue one or more files. Files that share a name
+   get numbered transcripts (`audio.txt`, `audio (2).txt`) so none overwrite
+   each other.
    Select multiple at once with Shift- or Command-click. Remove individual
    files with **Remove** or the Delete key. **Clear All** empties the queue.
 4. **Save to** — defaults to your Desktop.
