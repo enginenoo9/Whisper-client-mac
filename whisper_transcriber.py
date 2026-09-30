@@ -72,17 +72,70 @@ HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root {
+    color-scheme: light dark;  /* native controls & scrollbars follow too */
     --bg: #f5f5f7;
     --card: #ffffff;
     --text: #1d1d1f;
     --muted: #86868b;
     --border: #e3e3e6;
     --accent: #0071e3;
+    --accent-hover: #0077ed;
     --accent-press: #0060c4;
+    --accent-tint: rgba(0,113,227,.08);
+    --on-accent: #ffffff;
+    --primary-disabled: #a9cbf2;
     --field: #ffffff;
+    --hover: #f2f2f4;
+    --control: #e3e3e6;        /* × hover, progress-bar track */
+    --icon: #6e6e73;
+    --disabled: #b0b0b5;
+    --danger: #d70015;
+    --green: #34c759;
+    --rec: #ff3b30;
+    --seg-bg: #ececef;
+    --seg-on: #ffffff;
+    --toggle-off: #d1d1d6;
+    --knob: #ffffff;
+    --banner-bg: #fff7e6; --banner-border: #ffe2a8; --banner-fg: #7a5c00;
     --log-bg: #1c1c1e;
     --log-fg: #d6d6d6;
+    --scrim: rgba(0,0,0,.28);
     --shadow: 0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.05);
+    --modal-shadow: 0 20px 60px rgba(0,0,0,.3);
+  }
+  /* Dark mode follows the macOS appearance setting. Colors track Apple's
+     own dark palette (system blue #0a84ff, red #ff453a, grays). */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e1e;
+      --card: #2a2a2c;
+      --text: #f5f5f7;
+      --muted: #98989d;
+      --border: #3a3a3c;
+      --accent: #0a84ff;
+      --accent-hover: #2b93ff;
+      --accent-press: #0071e3;
+      --accent-tint: rgba(10,132,255,.16);
+      --primary-disabled: #1f3f63;
+      --field: #1f1f21;
+      --hover: #353538;
+      --control: #48484a;
+      --icon: #a1a1a6;
+      --disabled: #636366;
+      --danger: #ff453a;
+      --green: #30d158;
+      --rec: #ff453a;
+      --seg-bg: #1f1f21;
+      --seg-on: #48484a;
+      --toggle-off: #48484a;
+      --knob: #f5f5f7;
+      --banner-bg: #3a2e10; --banner-border: #6b5417; --banner-fg: #ffd479;
+      --log-bg: #141414;
+      --scrim: rgba(0,0,0,.5);
+      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+      --modal-shadow: 0 20px 60px rgba(0,0,0,.6);
+    }
+    .btn.primary:disabled { color: rgba(255,255,255,.45); }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -125,18 +178,18 @@ HTML = r"""<!DOCTYPE html>
     background-repeat: no-repeat; background-position: right 11px center; padding-right: 30px; }
   select:focus { outline: none; border-color: var(--accent); }
 
-  .btn:hover { background: #f5f5f7; }
+  .btn:hover { background: var(--hover); }
   .btn:active { transform: scale(.98); }
-  .btn:disabled { color: #b0b0b5; cursor: default; background: var(--field); }
+  .btn:disabled { color: var(--disabled); cursor: default; background: var(--field); }
   .btn.primary {
-    background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600;
+    background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600;
   }
-  .btn.primary:hover { background: #0077ed; }
+  .btn.primary:hover { background: var(--accent-hover); }
   .btn.primary:active { background: var(--accent-press); }
-  .btn.primary:disabled { background: #a9cbf2; border-color: #a9cbf2; color: #fff; }
+  .btn.primary:disabled { background: var(--primary-disabled); border-color: var(--primary-disabled); color: var(--on-accent); }
   .btn.small { padding: 7px 12px; font-size: 13px; }
   .btn.ghost { background: transparent; border-color: transparent; color: var(--accent); }
-  .btn.ghost:hover { background: rgba(0,113,227,.08); }
+  .btn.ghost:hover { background: var(--accent-tint); }
   .btn.block { width: 100%; }
 
   .filecol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -162,7 +215,7 @@ HTML = r"""<!DOCTYPE html>
   .filelist .empty { color: var(--muted); font-size: 13px; padding: 34px 10px; text-align: center; }
   #filelist { transition: border-color .12s, background .12s; }
   body.dragging #filelist {
-    border: 2px dashed var(--accent); background: rgba(0,113,227,.06); padding: 5px;
+    border: 2px dashed var(--accent); background: var(--accent-tint); padding: 5px;
   }
   body.dragging #filelist .empty { color: var(--accent); }
   .filelist .item {
@@ -170,48 +223,48 @@ HTML = r"""<!DOCTYPE html>
     font-size: 13px; cursor: default;
   }
   .filelist .item .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #filelist .item:hover { background: #f2f2f4; }
+  #filelist .item:hover { background: var(--hover); }
   #filelist .item .name { flex: 0 1 auto; }
   #filelist .item .folder { flex: 1 1 0; min-width: 40px; color: var(--muted); font-size: 12px;
                             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #filelist .item .rm {
     flex: none; width: 20px; height: 20px; border: none; border-radius: 50%; padding: 0;
-    background: transparent; color: #6e6e73; font-size: 16px; line-height: 20px;
+    background: transparent; color: var(--icon); font-size: 16px; line-height: 20px;
     cursor: pointer; opacity: 0; transition: opacity .1s, background .1s;
   }
   #filelist .item:hover .rm, #filelist .item .rm:focus-visible { opacity: 1; }
   #filelist .item .st { flex: none; display: flex; align-items: center; gap: 6px;
                         font-size: 12px; color: var(--muted); white-space: nowrap; }
-  #filelist .item .st.failed { color: #d70015; }
-  #filelist .item .bar { width: 64px; height: 4px; border-radius: 2px; background: #e3e3e6;
+  #filelist .item .st.failed { color: var(--danger); }
+  #filelist .item .bar { width: 64px; height: 4px; border-radius: 2px; background: var(--control);
                          overflow: hidden; }
   #filelist .item .bar > i { display: block; height: 100%; background: var(--accent);
                              transition: width .3s; }
   #filelist .item .pct { width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
-  #filelist .item .rm:hover { background: #e3e3e6; color: var(--text); }
+  #filelist .item .rm:hover { background: var(--control); color: var(--text); }
   .filebtns { display: flex; flex-direction: column; gap: 6px; }
 
   .path { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden;
           text-overflow: ellipsis; flex: 1; }
 
-  .seg { display: inline-flex; background: #ececef; border-radius: 9px; padding: 2px; }
+  .seg { display: inline-flex; background: var(--seg-bg); border-radius: 9px; padding: 2px; }
   .seg button {
     border: none; background: transparent; font: inherit; font-size: 13px;
     padding: 6px 14px; border-radius: 7px; cursor: pointer; color: var(--text);
     transition: background .12s;
   }
-  .seg button.on { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.12); font-weight: 600; }
+  .seg button.on { background: var(--seg-on); box-shadow: 0 1px 2px rgba(0,0,0,.12); font-weight: 600; }
 
   .toggle { position: relative; width: 40px; height: 24px; flex: none; }
   .toggle input { opacity: 0; width: 0; height: 0; }
   .toggle .slider {
-    position: absolute; inset: 0; background: #d1d1d6; border-radius: 999px; transition: background .18s;
+    position: absolute; inset: 0; background: var(--toggle-off); border-radius: 999px; transition: background .18s;
   }
   .toggle .slider::before {
     content: ""; position: absolute; width: 20px; height: 20px; left: 2px; top: 2px;
-    background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .18s;
+    background: var(--knob); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .18s;
   }
-  .toggle input:checked + .slider { background: #34c759; }
+  .toggle input:checked + .slider { background: var(--green); }
   .toggle input:checked + .slider::before { transform: translateX(16px); }
   .toggle-row { display: flex; align-items: center; gap: 10px; }
   .toggle-row .lbl { font-size: 13px; }
@@ -238,20 +291,20 @@ HTML = r"""<!DOCTYPE html>
   footer .fbtns { display: flex; gap: 6px; }
 
   .banner {
-    display: none; align-items: center; gap: 12px; background: #fff7e6; border: 1px solid #ffe2a8;
-    color: #7a5c00; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;
+    display: none; align-items: center; gap: 12px; background: var(--banner-bg); border: 1px solid var(--banner-border);
+    color: var(--banner-fg); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;
   }
   .banner.show { display: flex; }
   .banner .btn { margin-left: auto; }
 
   /* Overlays (Live + Cleanup) */
   .overlay {
-    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.28);
+    display: none; position: fixed; inset: 0; background: var(--scrim);
     backdrop-filter: blur(4px); z-index: 10; align-items: center; justify-content: center;
   }
   .overlay.show { display: flex; }
   .modal {
-    background: var(--card); border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    background: var(--card); border-radius: 18px; box-shadow: var(--modal-shadow);
     width: 540px; max-width: calc(100vw - 40px); padding: 24px 26px;
   }
   .modal h2 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.01em; }
@@ -266,7 +319,7 @@ HTML = r"""<!DOCTYPE html>
   .live-text.empty { color: var(--muted); }
   .modal .foot { display: flex; gap: 8px; margin-top: 16px; }
   .modal .foot .spacer { flex: 1; }
-  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #ff3b30; display: inline-block;
+  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--rec); display: inline-block;
              margin-right: 6px; animation: pulse 1.1s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 </style>
@@ -1522,25 +1575,27 @@ def _fix_macos_menu_bar_name():
         pass
 
 
-def _force_light_appearance():
-    """Force light appearance so the native window chrome doesn't follow
-    system Dark Mode (the page's own CSS is light regardless)."""
+def _system_is_dark():
+    """Whether macOS is currently in Dark Mode (also true while "Auto" is
+    in its dark phase). The page itself follows the appearance through
+    prefers-color-scheme, live; this only picks the window's background
+    color for the moment before the page has drawn, so a dark-mode launch
+    doesn't flash light."""
     try:
-        from AppKit import NSApplication, NSAppearance
-        NSApplication.sharedApplication().setAppearance_(
-            NSAppearance.appearanceNamed_("NSAppearanceNameAqua"))
+        from Foundation import NSUserDefaults
+        style = NSUserDefaults.standardUserDefaults().stringForKey_("AppleInterfaceStyle")
+        return style == "Dark"
     except Exception:
-        pass
+        return False
 
 
 def main():
     api = Api()
     _fix_macos_menu_bar_name()
-    _force_light_appearance()
     window = webview.create_window(
         "Whisper Transcriber", html=HTML, js_api=api,
         width=700, height=880, min_size=(640, 720),
-        background_color="#f5f5f7")
+        background_color="#1e1e1e" if _system_is_dark() else "#f5f5f7")
     api.window = window
     window.events.loaded += api.bind_drop
     webview.start()

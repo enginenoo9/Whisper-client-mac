@@ -23,9 +23,6 @@
     <string>11.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <!-- Force light appearance as a safety net against dark-mode Tk issues -->
-    <key>NSRequiresAquaSystemAppearance</key>
-    <true/>
     <!-- Don't show in the Dock as a persistent background agent; normal app -->
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>

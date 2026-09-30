@@ -248,7 +248,8 @@ minutes.
 
 - The GUI (`whisper_transcriber.py`) is an HTML/CSS/JS front-end rendered in a
   native macOS WebView via `pywebview`. All the real work stays in Python,
-  exposed to the page through pywebview's JS bridge.
+  exposed to the page through pywebview's JS bridge. It follows the macOS
+  Light/Dark appearance setting.
 - `Contents/MacOS/launcher` (bash) picks a Python interpreter — the bundled
   `Python.framework` if this was built with `build-dmg.sh`, otherwise a
   Homebrew Python for source installs — and hands off to `bootstrap.py`.
