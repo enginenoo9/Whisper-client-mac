@@ -141,9 +141,11 @@ HTML = r"""<!DOCTYPE html>
 
   .filecol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   /* Grows with its contents (a dropped folder can add dozens of files),
-     then scrolls. The cap keeps the whole page inside the default window
-     height, so the footer never scrolls out of view. */
-  #filelist { height: auto; min-height: 116px; max-height: 172px; }
+     then scrolls. The caps keep the whole page inside the default window
+     height, so the footer never scrolls out of view — lower while the
+     Details log is open, since that takes up the room. */
+  #filelist { height: auto; min-height: 116px; max-height: 320px; }
+  body.log-open #filelist { max-height: 170px; }
   .row.top { align-items: start; }
   .row.top > label.key { padding-top: 9px; }
   .filemeta { display: none; align-items: center; justify-content: space-between;
@@ -178,6 +180,14 @@ HTML = r"""<!DOCTYPE html>
     cursor: pointer; opacity: 0; transition: opacity .1s, background .1s;
   }
   #filelist .item:hover .rm, #filelist .item .rm:focus-visible { opacity: 1; }
+  #filelist .item .st { flex: none; display: flex; align-items: center; gap: 6px;
+                        font-size: 12px; color: var(--muted); white-space: nowrap; }
+  #filelist .item .st.failed { color: #d70015; }
+  #filelist .item .bar { width: 64px; height: 4px; border-radius: 2px; background: #e3e3e6;
+                         overflow: hidden; }
+  #filelist .item .bar > i { display: block; height: 100%; background: var(--accent);
+                             transition: width .3s; }
+  #filelist .item .pct { width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
   #filelist .item .rm:hover { background: #e3e3e6; color: var(--text); }
   .filebtns { display: flex; flex-direction: column; gap: 6px; }
 
@@ -210,7 +220,12 @@ HTML = r"""<!DOCTYPE html>
   .actions .btn { padding: 11px 26px; font-size: 15px; }
 
   .loglabel { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em;
-              text-transform: uppercase; margin: 0 2px 6px; }
+              text-transform: uppercase; margin: 0 2px 6px; padding: 2px 0;
+              border: none; background: none; font-family: inherit; cursor: pointer; }
+  .loglabel:hover { color: var(--text); }
+  .loglabel .chev { display: inline-block; width: 10px; transition: transform .12s; }
+  .loglabel[aria-expanded="true"] .chev { transform: rotate(90deg); }
+  .log[hidden] { display: none; }
   .log {
     background: var(--log-bg); color: var(--log-fg); border-radius: 12px;
     font-family: "SF Mono", Menlo, Monaco, monospace; font-size: 12px; line-height: 1.5;
@@ -320,8 +335,9 @@ HTML = r"""<!DOCTYPE html>
     <button class="btn" onclick="openLive()">Live Transcribe…</button>
   </div>
 
-  <div class="loglabel">Progress</div>
-  <div class="log" id="log"></div>
+  <button class="loglabel" id="logToggle" onclick="toggleLog()" aria-expanded="false"
+          aria-controls="log"><span class="chev">▸</span> Details</button>
+  <div class="log" id="log" hidden></div>
 
   <footer>
     <span class="status" id="status">Starting…</span>
@@ -375,7 +391,7 @@ HTML = r"""<!DOCTYPE html>
   // A rejected api() promise with no .catch() fails completely silently —
   // that's exactly what hid the add-files bug. Route uncaught rejections
   // through here so a future one shows up instead of vanishing.
-  function reportErr(e) { console.error(e); setStatus('Error — see log or try again.'); }
+  function reportErr(e) { console.error(e); setStatus('Error — see Details or try again.'); }
 
   window.addEventListener('pywebviewready', function () {
     api().ready().then(function (s) {
@@ -417,7 +433,28 @@ HTML = r"""<!DOCTYPE html>
       box.appendChild(b);
     });
   }
-  // rows: [{name, folder, path}] from Api._file_rows().
+  // A row's status in the current/last batch: Waiting, a progress bar
+  // while it's transcribing, Show in Finder once done, or Failed.
+  function fileStatus(r, i) {
+    var s = document.createElement('span'); s.className = 'st';
+    if (r.state === 'waiting') s.textContent = 'Waiting';
+    else if (r.state === 'running') {
+      s.innerHTML = '<span class="bar"><i style="width:' + r.pct + '%"></i></span>' +
+                    '<span class="pct">' + r.pct + '%</span>';
+      s.setAttribute('aria-label', 'Transcribing, ' + r.pct + ' percent');
+    } else if (r.state === 'done') {
+      var b = document.createElement('button'); b.className = 'linkbtn';
+      b.textContent = 'Show in Finder';
+      b.onclick = function () { api().reveal_output(i); };
+      s.appendChild(b);
+    } else if (r.state === 'failed') {
+      s.className += ' failed'; s.textContent = 'Failed';
+      s.title = 'See Details below for the error';
+    } else return null;
+    return s;
+  }
+
+  // rows: [{name, folder, path, state, pct}] from Api._file_rows().
   function renderFiles(rows) {
     STATE.files = rows;
     var box = document.getElementById('filelist'); box.innerHTML = '';
@@ -430,9 +467,16 @@ HTML = r"""<!DOCTYPE html>
       var d = document.createElement('div'); d.className = 'item'; d.title = r.path;
       d.innerHTML = '<span class="name">' + escapeHtml(r.name) + '</span>' +
                     '<span class="folder">' + escapeHtml(r.folder) + '</span>';
+      var st = fileStatus(r, i);
+      if (st) d.appendChild(st);
+      // No × on the file being transcribed: removing it wouldn't stop it.
+      // An invisible spacer takes its place so the statuses stay aligned.
       var x = document.createElement('button'); x.className = 'rm'; x.textContent = '×';
-      x.title = 'Remove'; x.setAttribute('aria-label', 'Remove ' + r.name + ' (' + r.folder + ')');
-      x.onclick = function () { removeFile(i); };
+      if (r.state === 'running') { x.style.visibility = 'hidden'; x.tabIndex = -1; x.setAttribute('aria-hidden', 'true'); }
+      else {
+        x.title = 'Remove'; x.setAttribute('aria-label', 'Remove ' + r.name + ' (' + r.folder + ')');
+        x.onclick = function () { removeFile(i); };
+      }
       d.appendChild(x);
       box.appendChild(d);
     });
@@ -523,7 +567,16 @@ HTML = r"""<!DOCTYPE html>
   function uninstallAll() { if (confirm('Remove ALL models and Python packages, then quit?')) api().uninstall_everything(); }
 
   // ── Push targets (called from Python) ──
-  function pushLog(t)      { var l = document.getElementById('log'); l.textContent += t + "\n"; l.scrollTop = l.scrollHeight; }
+  function pushLog(t)      { var l = document.getElementById('log'); l.textContent += t + "\n";
+                             if (/^\s*[✗⚠]/.test(t)) toggleLog(true);  // surface errors
+                             l.scrollTop = l.scrollHeight; }
+  function toggleLog(open) {
+    var l = document.getElementById('log'), b = document.getElementById('logToggle');
+    if (open === undefined) open = l.hidden;
+    l.hidden = !open; b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    document.body.classList.toggle('log-open', open);
+    if (open) l.scrollTop = l.scrollHeight;
+  }
   function setStatus(t)    { document.getElementById('status').textContent = t; }
   function setDownloadBtn(o){ var b = document.getElementById('downloadBtn'); b.disabled = !o.enabled; b.textContent = o.text; }
   function setTranscribe(o){ var b = document.getElementById('transcribeBtn'); b.disabled = !o.enabled; b.textContent = o.label; }
@@ -549,6 +602,7 @@ class Api:
     def __init__(self):
         self.window = None
         self._file_queue: list[str] = []
+        self._file_state: dict[str, dict] = {}  # path → {state, pct, output}
         self._cfg = self._load_config()
         self.outdir = self._cfg.get("outdir") if os.path.isdir(
             self._cfg.get("outdir", "")) else os.path.expanduser("~/Desktop")
@@ -678,10 +732,33 @@ class Api:
         for p in self._file_queue:
             parent = os.path.dirname(p)
             short = "~" + p[len(home):] if p.startswith(home + os.sep) else p
+            st = self._file_state.get(p, {})
             rows.append({"name": os.path.basename(p),
                          "folder": "Home" if parent == home else os.path.basename(parent),
-                         "path": short})
+                         "path": short,
+                         # "", "waiting", "running", "done" or "failed" — the
+                         # file's progress in the current/last batch.
+                         "state": st.get("state", ""),
+                         "pct": st.get("pct", 0)})
         return rows
+
+    def _push_files(self):
+        self._js("renderFiles", self._file_rows())
+
+    def _set_file_state(self, path, **fields):
+        self._file_state.setdefault(path, {}).update(fields)
+        self._push_files()
+
+    def reveal_output(self, index):
+        """Show in Finder: select the file's transcript in its folder."""
+        index = int(index)
+        if not (0 <= index < len(self._file_queue)):
+            return
+        out = self._file_state.get(self._file_queue[index], {}).get("output")
+        if out and os.path.exists(out):
+            subprocess.run(["open", "-R", out])
+        else:
+            self._status("That transcript isn't there anymore — it may have been moved.")
 
     def _queue_files(self, paths):
         added = 0
@@ -736,12 +813,14 @@ class Api:
     def remove_files(self, indices):
         for i in sorted((int(x) for x in indices), reverse=True):
             if 0 <= i < len(self._file_queue):
+                self._file_state.pop(self._file_queue[i], None)
                 del self._file_queue[i]
         self._refresh_transcribe()
         return self._file_rows()
 
     def clear_files(self):
         self._file_queue.clear()
+        self._file_state.clear()
         self._refresh_transcribe()
         return self._file_rows()
 
@@ -812,7 +891,7 @@ class Api:
                 self._status("Ready.")
             else:
                 self._log("✗ Install failed — see log above.")
-                self._status("Installation failed — see log.")
+                self._status("Installation failed — see Details.")
                 self._js("setInstallRetry")
             self._refresh_transcribe()
         threading.Thread(target=_do, daemon=True).start()
@@ -945,7 +1024,7 @@ class Api:
                 self._check_install()
             else:
                 self._log("✗ Repair failed — see log above. Check your internet connection.")
-                self._status("Repair failed — see log.")
+                self._status("Repair failed — see Details.")
         threading.Thread(target=_do, daemon=True).start()
 
     # ── Model download ────────────────────────────────────────────────────────
@@ -1116,6 +1195,11 @@ class Api:
         if bundle_resources:
             extra.insert(0, os.path.join(bundle_resources, "bin"))
         env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
+        # mlx_whisper fetches the model through huggingface_hub when it isn't
+        # cached yet; keep its download bars and "set a HF_TOKEN" warning
+        # out of the log (same as the Download button).
+        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        env["HF_HUB_VERBOSITY"] = "error"
         return env
 
     def _find_mlx_exe(self):
@@ -1127,13 +1211,26 @@ class Api:
                 return cand
         return None
 
-    def _run_mlx_cli(self, mlx_exe, file_path, model, out_dir, cli_fmt, env, base):
+    # With --verbose False, mlx_whisper draws a tqdm bar counting audio
+    # frames ("  42%|████  | 2280/5430 [00:05<00:07, 400.00frames/s]"). tqdm
+    # redraws it with \r, which text-mode pipes turn into separate lines, so
+    # each redraw arrives as its own line to parse.
+    _FRAMES_RE = re.compile(r"(\d+)/(\d+) \[[^\]]*frames/s\]")
+
+    def _run_mlx_cli(self, mlx_exe, file_path, model, out_dir, cli_fmt, env, base,
+                     on_progress=None):
         cmd = [mlx_exe, file_path, "--model", model, "--output-name", base,
-               "--output-dir", out_dir, "--output-format", cli_fmt]
+               "--output-dir", out_dir, "--output-format", cli_fmt, "--verbose", "False"]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, env=env)
         for line in proc.stdout:
-            self._log(line.rstrip())
+            m = self._FRAMES_RE.search(line)
+            if m:
+                done, total = int(m.group(1)), int(m.group(2))
+                if on_progress and total:
+                    on_progress(min(done * 100 // total, 100))
+            elif line.strip():
+                self._log(line.rstrip())
         proc.wait()
         return proc.returncode == 0
 
@@ -1156,7 +1253,8 @@ class Api:
             names.append(name)
         return names
 
-    def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env, base):
+    def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env, base,
+                            on_progress=None):
         if fmt in ("pdf", "docx"):
             # If mlx_whisper wrote its "<base>.txt" straight into outdir, it
             # would collide with (silently overwrite, then delete) any real
@@ -1165,7 +1263,8 @@ class Api:
             # instead, so it can never touch a real file in the user's
             # chosen folder.
             with tempfile.TemporaryDirectory() as tmpdir:
-                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, "txt", env, base):
+                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, "txt", env, base,
+                                         on_progress):
                     return False
                 tmp_txt = os.path.join(tmpdir, base + ".txt")
                 if not os.path.exists(tmp_txt):
@@ -1179,7 +1278,8 @@ class Api:
                     else self._write_docx(text, base, outdir))
 
         # txt / srt / vtt: mlx_whisper writes directly into outdir.
-        if not self._run_mlx_cli(mlx_exe, file_path, model, outdir, fmt, env, base):
+        if not self._run_mlx_cli(mlx_exe, file_path, model, outdir, fmt, env, base,
+                                 on_progress):
             return False
         if self.cleanup and fmt == "txt":
             txt_path = os.path.join(outdir, base + ".txt")
@@ -1214,7 +1314,7 @@ class Api:
                 self.is_running = False
                 self._log("✗ ffmpeg not found.")
                 self._log("  DMG install: reinstall the app. Source: brew install ffmpeg")
-                self._status("ffmpeg required — see log.")
+                self._status("ffmpeg required — see Details.")
                 self._refresh_transcribe()
                 return
             if mlx_exe is None:
@@ -1224,30 +1324,60 @@ class Api:
                 self._refresh_transcribe()
                 return
 
-            failed = []
+            # Every file in this batch starts as "waiting"; files added
+            # while it runs have no state, so they don't look queued for it.
+            self._file_state.clear()
+            for p in files:
+                self._file_state[p] = {"state": "waiting", "pct": 0}
+            self._push_files()
+
+            failed, skipped, done = [], 0, 0
             bases = self._output_names(files)
             for i, (file_path, base) in enumerate(zip(files, bases), 1):
                 name = os.path.basename(file_path)
+                if file_path not in self._file_queue:
+                    skipped += 1  # removed from the list before its turn
+                    continue
                 self._log(f"\n[{i}/{n}] {name}")
                 self._log(f"  Model : {model}")
                 self._log(f"  Format: {fmt}  →  {outdir}")
-                self._status(f"[{i}/{n}] Transcribing {name}…")
-                ok = self._transcribe_via_cli(file_path, model, outdir, fmt, mlx_exe, env, base)
+                self._status(f"Transcribing {name} ({i} of {n})…")
+                self._set_file_state(file_path, state="running", pct=0)
+
+                last = [0]
+
+                def on_progress(pct, path=file_path):
+                    if pct != last[0]:  # only redraw the list on a new percent
+                        last[0] = pct
+                        self._set_file_state(path, pct=pct)
+
+                ok = self._transcribe_via_cli(file_path, model, outdir, fmt, mlx_exe, env,
+                                              base, on_progress)
+                output = os.path.join(outdir, base + "." + fmt)
                 if ok:
-                    self._log(f"✓ Saved to: {os.path.join(outdir, base + '.' + fmt)}")
+                    done += 1
+                    self._log(f"✓ Saved to: {output}")
+                    self._set_file_state(file_path, state="done", pct=100, output=output)
                 else:
-                    self._log("✗ Failed.")
+                    self._log(f"✗ Failed: {name}")
                     failed.append(name)
+                    self._set_file_state(file_path, state="failed")
 
             self.is_running = False
-            done = n - len(failed)
-            if not failed:
-                self._log(f"\n✓ All {n} file{'s' if n > 1 else ''} transcribed successfully.")
-                self._status(f"Done — {n} transcript{'s' if n > 1 else ''} saved to {outdir}")
-                subprocess.run(["open", outdir])
+            folder = os.path.basename(outdir.rstrip(os.sep)) or outdir
+            if not failed and not done:
+                self._status("Nothing transcribed — the files were removed from the list.")
+            elif not failed:
+                self._log(f"\n✓ {done} file{'s' if done != 1 else ''} transcribed successfully.")
+                self._status(f"Done — {done} transcript{'s' if done != 1 else ''} "
+                             f"saved to {folder}.")
             else:
-                self._log(f"\n⚠  {done}/{n} succeeded. Failed: {', '.join(failed)}")
-                self._status(f"{done}/{n} transcribed. {len(failed)} failed — see log.")
+                self._log(f"\n⚠  {done} of {done + len(failed)} succeeded. "
+                          f"Failed: {', '.join(failed)}")
+                self._status(f"{done} transcribed, {len(failed)} failed — see Details.")
+            if skipped:
+                self._log(f"({skipped} file{'s were' if skipped != 1 else ' was'} removed "
+                          "from the list before its turn and skipped.)")
             self.set_model(self.model_index)
             self._refresh_transcribe()
         threading.Thread(target=_do, daemon=True).start()
@@ -1371,7 +1501,7 @@ class Api:
         else:
             ok = self._write_docx(text, base, self.outdir)
         if not ok:
-            self._js("liveStatus", "Save failed — see the log in the main window.")
+            self._js("liveStatus", "Save failed — see Details in the main window.")
             return
         self._js("liveStatus", f"Saved: {base}.{fmt}")
         subprocess.run(["open", self.outdir])
