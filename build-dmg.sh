@@ -30,7 +30,7 @@
 #
 set -euo pipefail
 
-VERSION="3.1"
+VERSION="3.2"
 APP_NAME="Whisper Transcriber"
 DMG_NAME="Whisper-Transcriber-${VERSION}"
 
@@ -171,8 +171,8 @@ echo "  Verifying framework still works after thinning…"
 # ── 5. Ad-hoc code sign ───────────────────────────────────────────────────────
 # No Apple Developer ID cert is configured for this project, so this is an
 # ad-hoc signature only. It satisfies Gatekeeper on the build machine; on any
-# other Mac, recipients need to right-click → Open the first time (see
-# README). A paid Apple Developer Program membership would allow full
+# other Mac, recipients need to approve it once via System Settings →
+# Privacy & Security → Open Anyway (see README). A paid Apple Developer Program membership would allow full
 # notarization and remove that step.
 echo "→ Signing .app (ad-hoc)…"
 codesign --force --deep --sign - "$APP_DST"
@@ -207,7 +207,7 @@ echo "    required — mlx-whisper installs itself into a"
 echo "    private venv on first launch."
 echo ""
 echo "  First-launch note (no Apple Developer cert):"
-echo "    macOS will show 'unidentified developer'."
-echo "    Right-click the app → Open → Open to bypass"
-echo "    (needed only once per Mac)."
+echo "    macOS will block the first launch. Recipients"
+echo "    click Done, then System Settings → Privacy &"
+echo "    Security → Open Anyway (needed once per Mac)."
 echo "==================================================="

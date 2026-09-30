@@ -35,8 +35,18 @@ MODELS = [
 OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
 LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
-# Keep in sync with REQUIRED_PACKAGES in the .app's bootstrap.py.
-REQUIRED_PACKAGES = ["mlx-whisper", "fpdf2", "python-docx", "sounddevice",
+# Keep these in sync with bootstrap.py and setup.command.
+#
+# mlx-whisper declares a dependency on torch, but only its model-conversion
+# script uses it — transcription never imports it. torch (plus sympy, which
+# it pulls in) is ~500 MB, about half the whole environment. So mlx-whisper
+# is installed with --no-deps, pinned so a new release can't quietly start
+# needing something that isn't listed, and its real runtime dependencies are
+# listed here instead.
+MLX_WHISPER_PACKAGE = "mlx-whisper==0.4.3"
+REQUIRED_PACKAGES = ["mlx", "numba", "numpy", "scipy", "tiktoken", "tqdm",
+                     "more-itertools", "huggingface_hub",
+                     "fpdf2", "python-docx", "sounddevice",
                      "pyobjc-framework-Cocoa", "pywebview"]
 
 PDF_UNICODE_FONTS = [
@@ -642,20 +652,33 @@ class Api:
             self._status("mlx-whisper not installed — click Install Now.")
         self._refresh_transcribe()
 
+    def _pip_install_all(self):
+        """Install/upgrade every runtime package, streaming pip's output to
+        the log. Returns True on success."""
+        pip = [sys.executable, "-m", "pip", "install", "--upgrade"]
+        for cmd in (pip + REQUIRED_PACKAGES, pip + ["--no-deps", MLX_WHISPER_PACKAGE]):
+            self._log("→ " + " ".join(cmd[2:]))
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                if line.strip():
+                    self._log(line.rstrip())
+            proc.wait()
+            if proc.returncode != 0:
+                return False
+        return True
+
     def install_mlx(self):
         self._status("Installing mlx-whisper — this may take a minute…")
 
         def _do():
-            self._log("→ pip install mlx-whisper")
-            r = subprocess.run([sys.executable, "-m", "pip", "install", "mlx-whisper"],
-                               capture_output=True, text=True)
-            if r.returncode == 0:
+            if self._pip_install_all():
                 self.mlx_installed = True
                 self._js("setInstallDone")
                 self._log("✓ Installed successfully.")
                 self._status("Ready.")
             else:
-                self._log("✗ Failed:\n" + r.stderr[:500])
+                self._log("✗ Install failed — see log above.")
                 self._status("Installation failed — see log.")
                 self._js("setInstallRetry")
             self._refresh_transcribe()
@@ -684,15 +707,33 @@ class Api:
                         return True
         return False
 
-    def _model_dirs(self):
-        cache = self._hf_cache_dir()
-        if not os.path.isdir(cache):
-            return []
-        return [os.path.join(cache, nm) for nm in os.listdir(cache)
-                if nm.startswith("models--mlx-community--whisper")]
+    # Sizes and deletion go through huggingface_hub's own cache scanner
+    # rather than walking models--*/ folders directly: huggingface_hub 2.0
+    # moved file contents into a shared hub/blobs/ store that the per-model
+    # folders only link to, so deleting a model's folder left its gigabytes
+    # behind and measuring it reported a few KB. The scanner understands
+    # both layouts.
 
-    def _model_dir_for(self, repo):
-        return os.path.join(self._hf_cache_dir(), "models--" + repo.replace("/", "--"))
+    def _scan_cache(self):
+        try:
+            from huggingface_hub import scan_cache_dir
+            return scan_cache_dir(self._hf_cache_dir())
+        except Exception:
+            return None  # no cache yet, or huggingface_hub not installed
+
+    @staticmethod
+    def _whisper_repos(info):
+        if info is None:
+            return []
+        return [r for r in info.repos
+                if r.repo_type == "model" and r.repo_id.startswith("mlx-community/whisper")]
+
+    def _delete_cached(self, repo_ids):
+        info = self._scan_cache()
+        hashes = [rev.commit_hash for r in self._whisper_repos(info)
+                  if r.repo_id in repo_ids for rev in r.revisions]
+        if hashes:
+            info.delete_revisions(*hashes).execute()
 
     @staticmethod
     def _human_size(n):
@@ -703,58 +744,39 @@ class Api:
             n /= 1024
         return f"{n:.1f} GB"
 
-    @staticmethod
-    def _dir_size(d):
-        total = 0
-        for root, _dirs, files in os.walk(d):
-            for fn in files:
-                fp = os.path.join(root, fn)
-                try:
-                    if not os.path.islink(fp):
-                        total += os.path.getsize(fp)
-                except OSError:
-                    pass
-        return total
-
-    def _disk_usage_models(self):
-        return sum(self._dir_size(d) for d in self._model_dirs())
-
     def cleanup_info(self):
-        return {"count": len(self._model_dirs()),
-                "size": self._human_size(self._disk_usage_models()),
-                "models": self.installed_models()}
-
-    def installed_models(self):
-        out = []
+        repos = {r.repo_id: r for r in self._whisper_repos(self._scan_cache())}
+        models = []
         for i, (label, repo) in enumerate(MODELS):
-            d = self._model_dir_for(repo)
-            installed = os.path.isdir(d)
-            out.append({"index": i, "label": label, "installed": installed,
-                        "size": self._human_size(self._dir_size(d)) if installed else None})
-        return out
+            r = repos.get(repo)
+            models.append({"index": i, "label": label, "installed": r is not None,
+                           "size": self._human_size(r.size_on_disk) if r else None})
+        return {"count": len(repos),
+                "size": self._human_size(sum(r.size_on_disk for r in repos.values())),
+                "models": models}
 
     def delete_model(self, index):
+        # Synchronous on purpose: the Clean up list re-reads the cache as
+        # soon as this call returns, so deleting in a background thread
+        # could refresh the list before the model was actually gone.
         index = int(index)
         if not (0 <= index < len(MODELS)):
             return
         label, repo = MODELS[index]
-        d = self._model_dir_for(repo)
-
-        def _do():
-            if os.path.isdir(d):
-                try:
-                    shutil.rmtree(d)
-                    self._log(f"✓ Deleted {label} from cache.")
-                    self._status("Model deleted — it'll re-download when next used.")
-                except Exception as e:
-                    self._log(f"(could not remove {label}: {e})")
-            if index == self.model_index:
-                self.set_model(self.model_index)  # refresh download button
-        threading.Thread(target=_do, daemon=True).start()
+        try:
+            self._delete_cached({repo})
+            self._log(f"✓ Deleted {label} from cache.")
+            self._status("Model deleted — it'll re-download when next used.")
+        except Exception as e:
+            self._log(f"(could not remove {label}: {e})")
+        if index == self.model_index:
+            self.set_model(self.model_index)  # refresh download button
 
     def uninstall_everything(self):
-        for d in self._model_dirs():
-            shutil.rmtree(d, ignore_errors=True)
+        try:
+            self._delete_cached({r.repo_id for r in self._whisper_repos(self._scan_cache())})
+        except Exception:
+            pass
         try:
             os.remove(CONFIG_PATH)
         except OSError:
@@ -779,18 +801,12 @@ class Api:
             return
         self._repairing = True
         self._status("Repairing — reinstalling packages…")
-        self._log("\n→ pip install --upgrade " + " ".join(REQUIRED_PACKAGES))
+        self._log("\n→ Repairing installation…")
 
         def _do():
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "pip", "install", "--upgrade"] + REQUIRED_PACKAGES,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            for line in proc.stdout:
-                if line.strip():
-                    self._log(line.rstrip())
-            proc.wait()
+            ok = self._pip_install_all()
             self._repairing = False
-            if proc.returncode == 0:
+            if ok:
                 self._log("✓ Repair complete. Quit and reopen the app to load the updated packages.")
                 self._status("Repair complete — restart the app.")
                 self._check_install()
