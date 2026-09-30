@@ -30,7 +30,7 @@
 #
 set -euo pipefail
 
-VERSION="3.3"
+VERSION="3.4"
 APP_NAME="Whisper Transcriber"
 DMG_NAME="Whisper-Transcriber-${VERSION}"
 
