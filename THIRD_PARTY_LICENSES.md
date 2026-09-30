@@ -27,7 +27,7 @@ Distribution depends on how you got the app:
 | `python-docx` | DOCX output | MIT | https://github.com/python-openxml/python-docx |
 | `sounddevice` | Microphone capture | MIT | https://github.com/spatialaudio/python-sounddevice |
 | PortAudio (via `sounddevice`) | Audio I/O backend | MIT-style | https://www.portaudio.com |
-| `pyobjc-framework-Cocoa` | Corrects the macOS menu bar app name + forces light appearance | MIT | https://github.com/ronaldoussoren/pyobjc |
+| `pyobjc-framework-Cocoa` | Corrects the macOS menu bar app name + detects Dark Mode at launch | MIT | https://github.com/ronaldoussoren/pyobjc |
 | `pywebview` | Renders the GUI (HTML/CSS in a native WebView) | BSD-3-Clause | https://github.com/r0x0r/pywebview |
 | Python & Tkinter (Tcl/Tk) | Runtime; Tkinter for the one-time setup window only (the app itself is pywebview) | PSF / BSD-style | https://www.python.org |
 | **`fpdf2`** | PDF output | **LGPL-3.0** | https://github.com/py-pdf/fpdf2 |
