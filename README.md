@@ -140,8 +140,12 @@ that step.
 6. **Cleanup** — merges choppy per-segment line breaks into readable paragraphs.
 7. Click **Transcribe 1 File** / **Transcribe N Files**.
 
-Files are processed one at a time, in order, with progress shown in the log.
-When the last one finishes, the output folder opens automatically.
+Files are processed one at a time, in order. Each file's row shows its
+progress: *Waiting*, a progress bar while it's being transcribed, then
+**Show in Finder** (which opens the folder with that transcript selected) or
+*Failed*. Removing a file that's still waiting skips it. For the full log,
+open **Details** below the buttons; it opens by itself if something goes
+wrong.
 
 Your last choices (model, format, save folder, cleanup) are remembered next time.
 
@@ -176,7 +180,7 @@ macOS will prompt for microphone permission on first use.
 ## Maintenance
 
 - **Setup / Repair…** reinstalls and updates the app's Python packages in
-  place, with progress in the log. Use it if something stops working. Restart
+  place, with progress under **Details**. Use it if something stops working. Restart
   the app afterward.
 - **Clean up…** frees disk space:
   - **Delete** next to a model removes just that model (it re-downloads the
@@ -225,7 +229,7 @@ Needs internet access to install mlx-whisper the first time. Check your
 connection and reopen the app to retry. If only the model download fails,
 setup still finishes — download the model from the app's **Download** button.
 
-**"ffmpeg not found" in the log**
+**"ffmpeg not found" under Details**
 DMG installs bundle their own ffmpeg — reinstall from a fresh DMG if this
 happens. Source installs: `brew install ffmpeg`.
 
