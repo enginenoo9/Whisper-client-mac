@@ -38,6 +38,31 @@ MEDIA_EXTENSIONS = ["mp3", "mp4", "m4a", "wav", "flac", "aac", "ogg", "mkv", "we
 OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
 LIVE_OUTPUT_FORMATS = ["txt", "pdf", "docx"]
 
+# Spoken-language choices: Whisper's code → name. Whisper knows ~100; this
+# is the widely used subset, kept here rather than read from
+# mlx_whisper.tokenizer because importing that pulls in MLX (~1.5 s).
+LANGUAGES = [
+    ("ar", "Arabic"), ("bn", "Bengali"), ("bg", "Bulgarian"), ("yue", "Cantonese"),
+    ("ca", "Catalan"), ("zh", "Chinese"), ("hr", "Croatian"), ("cs", "Czech"),
+    ("da", "Danish"), ("nl", "Dutch"), ("en", "English"), ("et", "Estonian"),
+    ("tl", "Filipino (Tagalog)"), ("fi", "Finnish"), ("fr", "French"), ("de", "German"),
+    ("el", "Greek"), ("gu", "Gujarati"), ("he", "Hebrew"), ("hi", "Hindi"),
+    ("hu", "Hungarian"), ("is", "Icelandic"), ("id", "Indonesian"), ("it", "Italian"),
+    ("ja", "Japanese"), ("ko", "Korean"), ("lv", "Latvian"), ("lt", "Lithuanian"),
+    ("ms", "Malay"), ("mr", "Marathi"), ("no", "Norwegian"), ("fa", "Persian"),
+    ("pl", "Polish"), ("pt", "Portuguese"), ("pa", "Punjabi"), ("ro", "Romanian"),
+    ("ru", "Russian"), ("sr", "Serbian"), ("sk", "Slovak"), ("sl", "Slovenian"),
+    ("es", "Spanish"), ("sw", "Swahili"), ("sv", "Swedish"), ("ta", "Tamil"),
+    ("te", "Telugu"), ("th", "Thai"), ("tr", "Turkish"), ("uk", "Ukrainian"),
+    ("ur", "Urdu"), ("vi", "Vietnamese"), ("cy", "Welsh"),
+]
+LANGUAGE_CODES = {code for code, _ in LANGUAGES}
+
+# Live transcripts are written here as they're transcribed, so a crash or
+# an accidental Close never loses a recording. Outside the venv, so
+# "Uninstall everything" leaves them alone.
+LIVE_AUTOSAVE_DIR = os.path.expanduser("~/Whisper/Live Transcripts")
+
 # Keep these in sync with bootstrap.py and setup.command.
 #
 # mlx-whisper declares a dependency on torch, but only its model-conversion
@@ -166,7 +191,7 @@ HTML = r"""<!DOCTYPE html>
   }
 
   .row { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 12px; }
-  .row + .row { margin-top: 16px; }
+  .row + .row { margin-top: 12px; }
   .row > label.key { color: var(--muted); font-weight: 500; font-size: 13px; }
   .row .val { display: flex; align-items: center; gap: 10px; min-width: 0; }
 
@@ -180,6 +205,14 @@ HTML = r"""<!DOCTYPE html>
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5L6 7.5L9 4.5' stroke='%2386868b' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
     background-repeat: no-repeat; background-position: right 11px center; padding-right: 30px; }
   select:focus { outline: none; border-color: var(--accent); }
+  input.text {
+    flex: 1; min-width: 0; font-family: inherit; font-size: 14px;
+    border-radius: 9px; border: 1px solid var(--border);
+    background: var(--field); color: var(--text); padding: 9px 12px;
+    user-select: text;
+  }
+  input.text::placeholder { color: var(--muted); }
+  input.text:focus { outline: none; border-color: var(--accent); }
 
   .btn:hover { background: var(--hover); }
   .btn:active { transform: scale(.98); }
@@ -200,8 +233,8 @@ HTML = r"""<!DOCTYPE html>
      then scrolls. The caps keep the whole page inside the default window
      height, so the footer never scrolls out of view — lower while the
      Details log is open, since that takes up the room. */
-  #filelist { height: auto; min-height: 116px; max-height: 320px; }
-  body.log-open #filelist { max-height: 170px; }
+  #filelist { height: auto; min-height: 116px; max-height: 200px; }
+  body.log-open #filelist { max-height: 116px; }
   .row.top { align-items: start; }
   .row.top > label.key { padding-top: 9px; }
   .filemeta { display: none; align-items: center; justify-content: space-between;
@@ -239,6 +272,7 @@ HTML = r"""<!DOCTYPE html>
   #filelist .item .st { flex: none; display: flex; align-items: center; gap: 6px;
                         font-size: 12px; color: var(--muted); white-space: nowrap; }
   #filelist .item .st.failed { color: var(--danger); }
+  #filelist .item .st.cancelled { font-style: italic; }
   #filelist .item .bar { width: 64px; height: 4px; border-radius: 2px; background: var(--control);
                          overflow: hidden; }
   #filelist .item .bar > i { display: block; height: 100%; background: var(--accent);
@@ -270,7 +304,8 @@ HTML = r"""<!DOCTYPE html>
   .toggle input:checked + .slider { background: var(--green); }
   .toggle input:checked + .slider::before { transform: translateX(16px); }
   .toggle-row { display: flex; align-items: center; gap: 10px; }
-  .toggle-row .lbl { font-size: 13px; }
+  .toggle-row .lbl, .val > .lbl { font-size: 13px; }
+  .val > .lbl { white-space: nowrap; }
 
   .actions { display: flex; justify-content: center; gap: 12px; margin: 4px 0 16px; }
   .actions .btn { padding: 11px 26px; font-size: 15px; }
@@ -285,7 +320,7 @@ HTML = r"""<!DOCTYPE html>
   .log {
     background: var(--log-bg); color: var(--log-fg); border-radius: 12px;
     font-family: "SF Mono", Menlo, Monaco, monospace; font-size: 12px; line-height: 1.5;
-    padding: 12px 14px; height: 150px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    padding: 12px 14px; height: 130px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
     user-select: text;
   }
 
@@ -320,6 +355,8 @@ HTML = r"""<!DOCTYPE html>
     white-space: pre-wrap; word-break: break-word; user-select: text;
   }
   .live-text.empty { color: var(--muted); }
+  .autosave { color: var(--muted); font-size: 12px; margin: 6px 2px 0; visibility: hidden; }
+  .autosave.on { visibility: visible; }
   .mic { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px;
          visibility: hidden; }
   .mic.on { visibility: visible; }
@@ -383,16 +420,44 @@ HTML = r"""<!DOCTYPE html>
     </div>
 
     <div class="row">
+      <label class="key" for="language">Language</label>
+      <div class="val">
+        <select id="language" onchange="onLanguage()"></select>
+        <label class="toggle"><input type="checkbox" id="translate" onchange="onTranslate()"
+               aria-label="Translate to English"><span class="slider"></span></label>
+        <span class="lbl">Translate to English</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <label class="key" for="vocab">Vocabulary</label>
+      <div class="val">
+        <input type="text" class="text" id="vocab" spellcheck="false" maxlength="600"
+               placeholder="Names and terms to spell right, e.g. Kubernetes, Dr. Nguyen"
+               onchange="onVocab()"
+               title="Whisper will favor these spellings. Separate with commas.">
+      </div>
+    </div>
+
+    <div class="row">
       <label class="key">Cleanup</label>
       <div class="val toggle-row">
         <label class="toggle"><input type="checkbox" id="cleanup" onchange="onCleanup()"><span class="slider"></span></label>
         <span class="lbl">Merge segment breaks into flowing paragraphs</span>
       </div>
     </div>
+
+    <div class="row">
+      <label class="key">Timestamps</label>
+      <div class="val toggle-row">
+        <label class="toggle"><input type="checkbox" id="timestamps" onchange="onTimestamps()"><span class="slider"></span></label>
+        <span class="lbl">Start each paragraph with its time, like [00:12:34]</span>
+      </div>
+    </div>
   </div>
 
   <div class="actions">
-    <button class="btn primary" id="transcribeBtn" onclick="transcribe()" disabled>Transcribe</button>
+    <button class="btn primary" id="transcribeBtn" onclick="transcribeOrCancel()" disabled>Transcribe</button>
     <button class="btn" onclick="openLive()">Live Transcribe…</button>
   </div>
 
@@ -423,6 +488,8 @@ HTML = r"""<!DOCTYPE html>
     </div>
     <p class="sub" id="liveStatus">Ready — click Start Recording to begin</p>
     <div class="live-text empty" id="liveText">Transcript will appear here…</div>
+    <p class="autosave" id="autosave">Auto-saved as you go to ~/Whisper/Live Transcripts ·
+      <button class="linkbtn" onclick="api().live_reveal_autosave()">Show in Finder</button></p>
     <div class="foot">
       <button class="btn primary" id="recBtn" onclick="toggleRec()">Start Recording</button>
       <button class="btn" onclick="liveCopy()">Copy</button>
@@ -462,8 +529,11 @@ HTML = r"""<!DOCTYPE html>
     api().ready().then(function (s) {
       STATE.models = s.models; STATE.formats = s.formats; STATE.liveFormats = s.liveFormats;
       STATE.format = s.format; STATE.cleanup = s.cleanup; STATE.modelIndex = s.modelIndex;
-      renderModels(); renderFormat(); renderLiveFormat();
+      renderModels(); renderFormat(); renderLiveFormat(); renderLanguages(s.languages, s.language);
       document.getElementById('cleanup').checked = s.cleanup;
+      document.getElementById('timestamps').checked = s.timestamps;
+      document.getElementById('translate').checked = s.translate;
+      document.getElementById('vocab').value = s.vocab;
       document.getElementById('outdir').textContent = s.outdir;
       setStatus(s.mlxInstalled ? "Ready." : "mlx-whisper not installed — click Install Now.");
       if (!s.mlxInstalled) document.getElementById('banner').classList.add('show');
@@ -486,6 +556,13 @@ HTML = r"""<!DOCTYPE html>
       if (f === STATE.format) b.className = 'on';
       b.onclick = function () { STATE.format = f; renderFormat(); api().set_format(f); };
       box.appendChild(b);
+    });
+  }
+  function renderLanguages(langs, current) {
+    var sel = document.getElementById('language'); sel.innerHTML = '';
+    [{code: '', name: 'Detect automatically'}].concat(langs).forEach(function (l) {
+      var o = document.createElement('option'); o.value = l.code; o.textContent = l.name;
+      if (l.code === current) o.selected = true; sel.appendChild(o);
     });
   }
   function renderLiveFormat() {
@@ -515,6 +592,8 @@ HTML = r"""<!DOCTYPE html>
     } else if (r.state === 'failed') {
       s.className += ' failed'; s.textContent = 'Failed';
       s.title = 'See Details below for the error';
+    } else if (r.state === 'cancelled') {
+      s.className += ' cancelled'; s.textContent = 'Cancelled';
     } else return null;
     return s;
   }
@@ -579,13 +658,23 @@ HTML = r"""<!DOCTYPE html>
                          document.getElementById('liveModel').textContent = 'Model: ' + STATE.models[STATE.modelIndex].split('—')[0].trim();
                          api().set_model(STATE.modelIndex); }
   function onCleanup() { STATE.cleanup = document.getElementById('cleanup').checked; api().set_cleanup(STATE.cleanup); }
+  function onTimestamps() { api().set_timestamps(document.getElementById('timestamps').checked); }
+  function onLanguage()   { api().set_language(document.getElementById('language').value); }
+  function onTranslate()  { api().set_translate(document.getElementById('translate').checked); }
+  // Bridge calls run concurrently, so a set_vocab fired by the field's
+  // change event could land after a transcribe started by the same click.
+  // Starting a job saves the vocabulary first and waits for it.
+  function onVocab()      { return api().set_vocab(document.getElementById('vocab').value); }
 
   function addFiles()    { api().add_files().then(renderFiles).catch(reportErr); }
   function removeFile(i) { api().remove_files([i]).then(renderFiles).catch(reportErr); }
   function clearFiles()  { api().clear_files().then(renderFiles).catch(reportErr); }
   function chooseOutdir(){ api().choose_outdir().then(function (p) { document.getElementById('outdir').textContent = p; }).catch(reportErr); }
   function downloadModel(){ api().download_model(); }
-  function transcribe()  { api().transcribe(); }
+  function transcribeOrCancel() {
+    if (STATE.canCancel) api().cancel_transcribe();
+    else onVocab().then(function () { return api().transcribe(); }).catch(reportErr);
+  }
   function runSetup()    { api().run_setup(); }
   function installMlx()  { document.getElementById('installBtn').disabled = true;
                            document.getElementById('installBtn').textContent = 'Installing…'; api().install_mlx(); }
@@ -598,7 +687,7 @@ HTML = r"""<!DOCTYPE html>
   function closeLive() { if (STATE.recording) api().live_stop(); document.getElementById('liveOverlay').classList.remove('show'); }
   function toggleRec() {
     if (STATE.recording) { api().live_stop(); }
-    else { api().live_start(STATE.liveFmt); }
+    else { onVocab().then(function () { return api().live_start(STATE.liveFmt); }).catch(reportErr); }
   }
   function liveCopy()  { var t = document.getElementById('liveText'); navigator.clipboard && navigator.clipboard.writeText(t.textContent); liveStatus('Copied to clipboard.'); }
   function liveClear() { api().live_clear(); setLiveText(''); document.getElementById('liveSaveBtn').disabled = true; }
@@ -644,7 +733,9 @@ HTML = r"""<!DOCTYPE html>
   }
   function setStatus(t)    { document.getElementById('status').textContent = t; }
   function setDownloadBtn(o){ var b = document.getElementById('downloadBtn'); b.disabled = !o.enabled; b.textContent = o.text; }
-  function setTranscribe(o){ var b = document.getElementById('transcribeBtn'); b.disabled = !o.enabled; b.textContent = o.label; }
+  function setTranscribe(o){ var b = document.getElementById('transcribeBtn'); b.disabled = !o.enabled; b.textContent = o.label;
+                             STATE.canCancel = o.cancel; b.classList.toggle('primary', !o.cancel); }
+  function setAutosave(on) { document.getElementById('autosave').classList.toggle('on', on); }
   function setInstallDone(){ document.getElementById('banner').classList.remove('show'); }
   function setInstallRetry(){ var b = document.getElementById('installBtn'); b.disabled = false; b.textContent = 'Retry'; }
   function setLiveText(t)  { var e = document.getElementById('liveText');
@@ -679,17 +770,25 @@ class Api:
         self.out_format = self._cfg.get("format") if self._cfg.get(
             "format") in OUTPUT_FORMATS else "txt"
         self.cleanup = bool(self._cfg.get("cleanup", True))
+        self.timestamps = bool(self._cfg.get("timestamps", False))
+        self.language = self._cfg.get("language") if self._cfg.get(
+            "language") in LANGUAGE_CODES else ""  # "" = auto-detect
+        self.translate = bool(self._cfg.get("translate", False))
+        self.vocab = str(self._cfg.get("vocab", ""))
         self.model_index = self._cfg.get("model", DEFAULT_MODEL_INDEX)
         if not isinstance(self.model_index, int) or not (0 <= self.model_index < len(MODELS)):
             self.model_index = DEFAULT_MODEL_INDEX
         self.mlx_installed = False
         self.is_running = False
+        self._cancel = threading.Event()
+        self._proc = None  # the running mlx_whisper process, for Cancel
         self._downloading = False
         self._repairing = False
         # Live state
         self._live_recording = False
         self._live_stop = threading.Event()
         self._live_transcript = ""
+        self._live_autosave = None  # this transcript's file in LIVE_AUTOSAVE_DIR
 
     # ── JS bridge helpers ─────────────────────────────────────────────────────
 
@@ -725,6 +824,11 @@ class Api:
             "liveFormats": LIVE_OUTPUT_FORMATS,
             "format":      self.out_format,
             "cleanup":     self.cleanup,
+            "timestamps":  self.timestamps,
+            "languages":   [{"code": c, "name": n} for c, n in LANGUAGES],
+            "language":    self.language,
+            "translate":   self.translate,
+            "vocab":       self.vocab,
             "modelIndex":  self.model_index,
             "outdir":      self.outdir,
             "mlxInstalled": self.mlx_installed,
@@ -742,7 +846,9 @@ class Api:
 
     def _save_config(self):
         data = {"model": self.model_index, "format": self.out_format,
-                "outdir": self.outdir, "cleanup": self.cleanup}
+                "outdir": self.outdir, "cleanup": self.cleanup,
+                "timestamps": self.timestamps, "language": self.language,
+                "translate": self.translate, "vocab": self.vocab}
         try:
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, "w") as f:
@@ -772,6 +878,40 @@ class Api:
     def set_cleanup(self, flag):
         self.cleanup = bool(flag)
         self._save_config()
+
+    def set_timestamps(self, flag):
+        self.timestamps = bool(flag)
+        self._save_config()
+
+    def set_language(self, code):
+        self.language = code if code in LANGUAGE_CODES else ""
+        self._save_config()
+
+    def set_translate(self, flag):
+        self.translate = bool(flag)
+        self._save_config()
+
+    def set_vocab(self, text):
+        self.vocab = " ".join(str(text).split())  # one line, tidy spacing
+        self._save_config()
+
+    def _decode_opts(self):
+        """Language / translate / vocabulary as mlx_whisper.transcribe()
+        keyword arguments. The vocabulary goes in as Whisper's "initial
+        prompt": text the model treats as what came just before the audio,
+        so names and terms in it get spelled that way."""
+        opts = {"task": "translate" if self.translate else "transcribe"}
+        if self.language:
+            opts["language"] = self.language
+        if self.vocab:
+            opts["initial_prompt"] = self.vocab
+        return opts
+
+    @staticmethod
+    def _cli_args(opts):
+        """_decode_opts() as mlx_whisper command-line flags. Joined with
+        "=" so a vocabulary starting with "-" isn't read as a flag."""
+        return [f"--{key.replace('_', '-')}={val}" for key, val in opts.items()]
 
     # ── File queue ────────────────────────────────────────────────────────────
 
@@ -909,17 +1049,21 @@ class Api:
         subprocess.run(["open", self.outdir])
 
     def _refresh_transcribe(self):
-        n = len(self._file_queue)
-        ready = self.mlx_installed and n > 0 and not self.is_running
+        # While a batch runs, the button turns into Cancel.
         if self.is_running:
-            label = "Transcribing…"
-        elif n == 1:
+            cancelling = self._cancel.is_set()
+            self._js("setTranscribe", {"enabled": not cancelling, "cancel": True,
+                                       "label": "Cancelling…" if cancelling else "Cancel"})
+            return
+        n = len(self._file_queue)
+        ready = self.mlx_installed and n > 0
+        if n == 1:
             label = "Transcribe 1 File"
         elif n > 1:
             label = f"Transcribe {n} Files"
         else:
             label = "Transcribe"
-        self._js("setTranscribe", {"enabled": ready, "label": label})
+        self._js("setTranscribe", {"enabled": ready, "cancel": False, "label": label})
 
     # ── Install check / install ───────────────────────────────────────────────
 
@@ -1288,11 +1432,15 @@ class Api:
     _FRAMES_RE = re.compile(r"(\d+)/(\d+) \[[^\]]*frames/s\]")
 
     def _run_mlx_cli(self, mlx_exe, file_path, model, out_dir, cli_fmt, env, base,
-                     on_progress=None):
+                     opts, on_progress=None):
         cmd = [mlx_exe, file_path, "--model", model, "--output-name", base,
                "--output-dir", out_dir, "--output-format", cli_fmt, "--verbose", "False"]
+        cmd += self._cli_args(opts["decode"])
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, env=env)
+        self._proc = proc
+        if self._cancel.is_set():  # Cancel clicked just before _proc was set
+            proc.terminate()
         for line in proc.stdout:
             m = self._FRAMES_RE.search(line)
             if m:
@@ -1302,7 +1450,37 @@ class Api:
             elif line.strip():
                 self._log(line.rstrip())
         proc.wait()
+        self._proc = None
         return proc.returncode == 0
+
+    @staticmethod
+    def _timestamp(seconds):
+        s = int(seconds)
+        return f"[{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}]"
+
+    @classmethod
+    def _timestamped_text(cls, segments, cleanup):
+        """Transcript text with [hh:mm:ss] start times, from mlx_whisper's
+        JSON segments. With Cleanup on, segments are merged into paragraphs
+        of about four sentences, like _reflow_text, each stamped with when
+        it starts; with Cleanup off, every segment is its own line."""
+        lines = [(seg.get("start", 0), " ".join(seg.get("text", "").split()))
+                 for seg in segments]
+        lines = [(t, s) for t, s in lines if s]
+        if not cleanup:
+            return "".join(f"{cls._timestamp(t)} {s}\n" for t, s in lines)
+        paras, cur, start, sentences = [], [], 0, 0
+        for t, s in lines:
+            if not cur:
+                start = t
+            cur.append(s)
+            sentences += len(re.findall(r"[.!?](?=\s|$)", s))
+            if sentences >= 4:
+                paras.append(f"{cls._timestamp(start)} {' '.join(cur)}")
+                cur, sentences = [], 0
+        if cur:
+            paras.append(f"{cls._timestamp(start)} {' '.join(cur)}")
+        return "\n\n".join(paras) + "\n"
 
     @staticmethod
     def _output_names(files):
@@ -1324,34 +1502,51 @@ class Api:
         return names
 
     def _transcribe_via_cli(self, file_path, model, outdir, fmt, mlx_exe, env, base,
-                            on_progress=None):
-        if fmt in ("pdf", "docx"):
+                            opts, on_progress=None):
+        cleanup = opts["cleanup"]
+        # Timestamps need the segment times, which only mlx_whisper's JSON
+        # output has, so that path builds the .txt itself as well.
+        stamped = opts["timestamps"] and fmt in ("txt", "pdf", "docx")
+        if fmt in ("pdf", "docx") or stamped:
             # If mlx_whisper wrote its "<base>.txt" straight into outdir, it
             # would collide with (silently overwrite, then delete) any real
             # standalone .txt output already sitting there for this file.
             # Generate the intermediate text in an isolated scratch dir
             # instead, so it can never touch a real file in the user's
             # chosen folder.
+            cli_fmt = "json" if stamped else "txt"
             with tempfile.TemporaryDirectory() as tmpdir:
-                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, "txt", env, base,
-                                         on_progress):
+                if not self._run_mlx_cli(mlx_exe, file_path, model, tmpdir, cli_fmt, env,
+                                         base, opts, on_progress):
                     return False
-                tmp_txt = os.path.join(tmpdir, base + ".txt")
-                if not os.path.exists(tmp_txt):
+                tmp_out = os.path.join(tmpdir, base + "." + cli_fmt)
+                if not os.path.exists(tmp_out):
                     return False
-                with open(tmp_txt, encoding="utf-8") as f:
-                    text = f.read()
-            if self.cleanup:
+                with open(tmp_out, encoding="utf-8") as f:
+                    if stamped:
+                        text = self._timestamped_text(json.load(f).get("segments", []),
+                                                      cleanup)
+                    else:
+                        text = f.read()
+            if cleanup and not stamped:
                 text = self._reflow_text(text)
                 self._log("✓ Cleaned up line breaks in transcript.")
+            if fmt == "txt":
+                try:
+                    with open(os.path.join(outdir, base + ".txt"), "w", encoding="utf-8") as f:
+                        f.write(text)
+                    return True
+                except OSError as exc:
+                    self._log(f"✗ Couldn't save transcript: {exc}")
+                    return False
             return (self._write_pdf(text, base, outdir) if fmt == "pdf"
                     else self._write_docx(text, base, outdir))
 
         # txt / srt / vtt: mlx_whisper writes directly into outdir.
         if not self._run_mlx_cli(mlx_exe, file_path, model, outdir, fmt, env, base,
-                                 on_progress):
+                                 opts, on_progress):
             return False
-        if self.cleanup and fmt == "txt":
+        if cleanup and fmt == "txt":
             txt_path = os.path.join(outdir, base + ".txt")
             if os.path.exists(txt_path):
                 try:
@@ -1373,6 +1568,10 @@ class Api:
         outdir, fmt = self.outdir, self.out_format
         files = list(self._file_queue)
         n = len(files)
+        # Settings are fixed for the whole batch, even if changed meanwhile.
+        opts = {"cleanup": self.cleanup, "timestamps": self.timestamps,
+                "decode": self._decode_opts()}
+        self._cancel.clear()
         self.is_running = True
         self._refresh_transcribe()
         self._status(f"Transcribing {n} file{'s' if n > 1 else ''}… please wait.")
@@ -1405,6 +1604,8 @@ class Api:
             bases = self._output_names(files)
             for i, (file_path, base) in enumerate(zip(files, bases), 1):
                 name = os.path.basename(file_path)
+                if self._cancel.is_set():
+                    break
                 if file_path not in self._file_queue:
                     skipped += 1  # removed from the list before its turn
                     continue
@@ -1422,8 +1623,12 @@ class Api:
                         self._set_file_state(path, pct=pct)
 
                 ok = self._transcribe_via_cli(file_path, model, outdir, fmt, mlx_exe, env,
-                                              base, on_progress)
+                                              base, opts, on_progress)
                 output = os.path.join(outdir, base + "." + fmt)
+                if self._cancel.is_set() and not ok:
+                    self._log(f"(Cancelled: {name})")
+                    self._set_file_state(file_path, state="cancelled")
+                    break
                 if ok:
                     done += 1
                     self._log(f"✓ Saved to: {output}")
@@ -1435,7 +1640,17 @@ class Api:
 
             self.is_running = False
             folder = os.path.basename(outdir.rstrip(os.sep)) or outdir
-            if not failed and not done:
+            if self._cancel.is_set():
+                # Files that never got their turn go back to having no status.
+                for p in files:
+                    if self._file_state.get(p, {}).get("state") == "waiting":
+                        self._file_state.pop(p)
+                self._push_files()
+                self._log("\nCancelled.")
+                self._status(f"Cancelled — {done} transcript{'s' if done != 1 else ''} "
+                             f"saved to {folder}." if done else "Cancelled.")
+                self._cancel.clear()
+            elif not failed and not done:
                 self._status("Nothing transcribed — the files were removed from the list.")
             elif not failed:
                 self._log(f"\n✓ {done} file{'s' if done != 1 else ''} transcribed successfully.")
@@ -1451,6 +1666,18 @@ class Api:
             self.set_model(self.model_index)
             self._refresh_transcribe()
         threading.Thread(target=_do, daemon=True).start()
+
+    def cancel_transcribe(self):
+        """Stop the batch: kill the file being transcribed (nothing is
+        written for it) and skip the rest. Finished transcripts stay."""
+        if not self.is_running or self._cancel.is_set():
+            return
+        self._cancel.set()
+        self._status("Cancelling…")
+        self._refresh_transcribe()
+        proc = self._proc
+        if proc:
+            proc.terminate()
 
     # ── Live transcription ────────────────────────────────────────────────────
 
@@ -1484,7 +1711,34 @@ class Api:
         self._js("liveStatus", "Finishing last chunk…")
 
     def live_clear(self):
+        # The auto-saved file stays; the next words start a new one.
         self._live_transcript = ""
+        self._live_autosave = None
+        self._js("setAutosave", False)
+
+    def _autosave_live(self):
+        """Rewrite this transcript's file in LIVE_AUTOSAVE_DIR. Written to
+        a temp file and renamed into place, so a crash mid-write can't
+        leave a half-written transcript behind."""
+        try:
+            if not self._live_autosave:
+                os.makedirs(LIVE_AUTOSAVE_DIR, exist_ok=True)
+                stamp = datetime.now().strftime("%Y-%m-%d at %H.%M.%S")
+                self._live_autosave = os.path.join(LIVE_AUTOSAVE_DIR,
+                                                   f"Live Transcript {stamp}.txt")
+            tmp = self._live_autosave + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(self._live_transcript + "\n")
+            os.replace(tmp, self._live_autosave)
+            self._js("setAutosave", True)
+        except OSError as exc:
+            self._js("liveStatus", f"Couldn't auto-save: {exc}")
+
+    def live_reveal_autosave(self):
+        if self._live_autosave and os.path.exists(self._live_autosave):
+            subprocess.run(["open", "-R", self._live_autosave])
+        else:
+            subprocess.run(["open", LIVE_AUTOSAVE_DIR])
 
     def _record_loop(self):
         import sounddevice as sd
@@ -1560,12 +1814,14 @@ class Api:
             return
         try:
             result = mlx_whisper.transcribe(
-                audio, path_or_hf_repo=self._current_model()[1], verbose=False)
+                audio, path_or_hf_repo=self._current_model()[1], verbose=False,
+                **self._decode_opts())
             text = (result.get("text") or "").strip()
             if text:
                 sep = " " if self._live_transcript else ""
                 self._live_transcript += sep + text
                 self._js("setLiveText", self._live_transcript)
+                self._autosave_live()
         except Exception as exc:
             self._js("liveStatus", f"Transcription error: {exc}")
 
