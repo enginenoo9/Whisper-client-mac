@@ -137,17 +137,29 @@ that step.
    - `SRT` / `VTT` — subtitle formats (with timestamps)
    - `PDF` — formatted PDF document
    - `DOCX` — Word-compatible document
-6. **Cleanup** — merges choppy per-segment line breaks into readable paragraphs.
-7. Click **Transcribe 1 File** / **Transcribe N Files**.
+6. **Language** — leave it on *Detect automatically*, or pick the language
+   spoken (more reliable on short clips). Turn on **Translate to English** to
+   get an English transcript of speech in any language.
+7. **Vocabulary** — optional. List names and terms Whisper should spell your
+   way, separated by commas (e.g. `Kubernetes, Dr. Nguyen`). Whisper weighs
+   this most at the start of a recording.
+8. **Cleanup** — merges choppy per-segment line breaks into readable paragraphs.
+9. **Timestamps** — starts each paragraph in TXT, PDF, and DOCX with its time
+   in the recording, like `[00:12:34]` (each line, if Cleanup is off).
+10. Click **Transcribe 1 File** / **Transcribe N Files**.
 
 Files are processed one at a time, in order. Each file's row shows its
 progress: *Waiting*, a progress bar while it's being transcribed, then
 **Show in Finder** (which opens the folder with that transcript selected) or
-*Failed*. Removing a file that's still waiting skips it. For the full log,
+*Failed*. Removing a file that's still waiting skips it. While a batch runs,
+the button becomes **Cancel**: it stops the current file (no partial
+transcript is written) and skips the rest; finished transcripts are kept.
+For the full log,
 open **Details** below the buttons; it opens by itself if something goes
 wrong.
 
-Your last choices (model, format, save folder, cleanup) are remembered next time.
+Your last choices (model, format, save folder, language, vocabulary, and the
+switches) are remembered next time.
 
 ---
 
@@ -157,10 +169,16 @@ Click **Live Transcribe…** to transcribe from your microphone in real time.
 
 1. Click **Start Recording**. The app transcribes in ~10-second chunks, so text
    appears roughly every 10–15 seconds.
+   A **Mic** meter shows your input level while recording. The Language,
+   Translate, and Vocabulary settings from the main window apply here too.
 2. Click **Stop Recording** when you're done.
 3. Pick a format (TXT, PDF, or DOCX) and click **Save…**. The transcript is
    saved to your **Save to** folder with a timestamped filename. You can also
    **Copy** it to the clipboard, or **Clear** it to start over.
+
+Nothing is lost if you forget to save: the transcript is also saved as you go
+to `~/Whisper/Live Transcripts/` (click **Show in Finder** under the text).
+**Clear** starts a new file there.
 
 macOS will prompt for microphone permission on first use.
 
