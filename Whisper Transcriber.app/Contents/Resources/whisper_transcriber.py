@@ -83,7 +83,10 @@ HTML = r"""<!DOCTYPE html>
     --accent-press: #0060c4;
     --accent-tint: rgba(0,113,227,.08);
     --on-accent: #ffffff;
-    --primary-disabled: #a9cbf2;
+    /* Neutral gray rather than a pale blue: white text on light blue read
+       as washed-out and looked half-enabled. */
+    --primary-disabled: #e8e8ed;
+    --primary-disabled-fg: #8e8e93;
     --field: #ffffff;
     --hover: #f2f2f4;
     --control: #e3e3e6;        /* × hover, progress-bar track */
@@ -117,6 +120,7 @@ HTML = r"""<!DOCTYPE html>
       --accent-press: #0071e3;
       --accent-tint: rgba(10,132,255,.16);
       --primary-disabled: #1f3f63;
+      --primary-disabled-fg: rgba(255,255,255,.45);
       --field: #1f1f21;
       --hover: #353538;
       --control: #48484a;
@@ -135,7 +139,6 @@ HTML = r"""<!DOCTYPE html>
       --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
       --modal-shadow: 0 20px 60px rgba(0,0,0,.6);
     }
-    .btn.primary:disabled { color: rgba(255,255,255,.45); }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -149,9 +152,9 @@ HTML = r"""<!DOCTYPE html>
   }
   .wrap { max-width: 640px; margin: 0 auto; padding: 28px 28px 40px; }
 
-  header { text-align: center; margin-bottom: 22px; }
-  header h1 { font-size: 27px; font-weight: 700; letter-spacing: -.02em; margin: 0; }
-  header p  { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+  /* No big title: the window's title bar already says "Whisper Transcriber". */
+  header { text-align: center; margin: -8px 0 16px; }
+  header p  { color: var(--muted); font-size: 13px; margin: 0; }
 
   .card {
     background: var(--card);
@@ -186,7 +189,7 @@ HTML = r"""<!DOCTYPE html>
   }
   .btn.primary:hover { background: var(--accent-hover); }
   .btn.primary:active { background: var(--accent-press); }
-  .btn.primary:disabled { background: var(--primary-disabled); border-color: var(--primary-disabled); color: var(--on-accent); }
+  .btn.primary:disabled { background: var(--primary-disabled); border-color: var(--primary-disabled); color: var(--primary-disabled-fg); }
   .btn.small { padding: 7px 12px; font-size: 13px; }
   .btn.ghost { background: transparent; border-color: transparent; color: var(--accent); }
   .btn.ghost:hover { background: var(--accent-tint); }
@@ -317,6 +320,12 @@ HTML = r"""<!DOCTYPE html>
     white-space: pre-wrap; word-break: break-word; user-select: text;
   }
   .live-text.empty { color: var(--muted); }
+  .mic { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px;
+         visibility: hidden; }
+  .mic.on { visibility: visible; }
+  .meter { width: 120px; height: 6px; border-radius: 3px; background: var(--control); overflow: hidden; }
+  .meter > i { display: block; height: 100%; width: 0; background: var(--green);
+               transition: width .08s linear; }
   .modal .foot { display: flex; gap: 8px; margin-top: 16px; }
   .modal .foot .spacer { flex: 1; }
   .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--rec); display: inline-block;
@@ -327,7 +336,6 @@ HTML = r"""<!DOCTYPE html>
 <body>
 <div class="wrap">
   <header>
-    <h1>Whisper Transcriber</h1>
     <p>Local transcription · runs entirely on your Mac</p>
   </header>
 
@@ -408,6 +416,10 @@ HTML = r"""<!DOCTYPE html>
     <p class="sub" id="liveModel"></p>
     <div class="bar">
       <div class="seg" id="liveFormat"></div>
+      <div class="mic" id="mic" title="Microphone input level">
+        Mic <div class="meter" role="meter" aria-label="Microphone level"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="meter"><i id="meterFill"></i></div>
+      </div>
     </div>
     <p class="sub" id="liveStatus">Ready — click Start Recording to begin</p>
     <div class="live-text empty" id="liveText">Transcript will appear here…</div>
@@ -640,7 +652,12 @@ HTML = r"""<!DOCTYPE html>
                              else { e.textContent = 'Transcript will appear here…'; e.classList.add('empty'); } }
   function liveStatus(t)   { document.getElementById('liveStatus').innerHTML = t; }
   function setRecording(r) { STATE.recording = r;
-                             document.getElementById('recBtn').textContent = r ? 'Stop Recording' : 'Start Recording'; }
+                             document.getElementById('recBtn').textContent = r ? 'Stop Recording' : 'Start Recording';
+                             document.getElementById('mic').classList.toggle('on', r);
+                             if (!r) setLevel(0); }
+  function setLevel(v)     { var p = Math.round(v * 100);
+                             document.getElementById('meterFill').style.width = p + '%';
+                             document.getElementById('meter').setAttribute('aria-valuenow', p); }
   function setLiveSave(on) { document.getElementById('liveSaveBtn').disabled = !on; }
 </script>
 </body>
@@ -1475,10 +1492,26 @@ class Api:
         import time
         buffer, last = [], time.monotonic()
         lock = threading.Lock()
+        peak = [0.0]  # loudest block RMS since the meter last drew
 
         def cb(indata, frames, tinfo, status):
+            block = indata[:, 0].copy()
+            rms = float(np.sqrt(np.mean(block * block))) if len(block) else 0.0
             with lock:
-                buffer.append(indata[:, 0].copy())
+                buffer.append(block)
+                peak[0] = max(peak[0], rms)
+
+        def meter():
+            # Its own thread: the loop below transcribes each chunk inline,
+            # which would freeze the meter for seconds at a time. RMS is
+            # drawn on a -50…-10 dBFS scale, so normal speech sits around
+            # the middle and room noise near the bottom.
+            while not self._live_stop.wait(0.1):
+                with lock:
+                    rms, peak[0] = peak[0], 0.0
+                db = 20 * np.log10(max(rms, 1e-6))
+                self._js("setLevel", round(min(max((db + 50) / 40, 0.0), 1.0), 2))
+            self._js("setLevel", 0)
 
         def take():
             # The audio callback runs on PortAudio's own thread. Without the
@@ -1492,6 +1525,7 @@ class Api:
         try:
             with sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1,
                                 dtype="float32", callback=cb):
+                threading.Thread(target=meter, daemon=True).start()
                 while not self._live_stop.is_set():
                     now = time.monotonic()
                     if now - last >= self.CHUNK_SECS:
