@@ -34,12 +34,12 @@ IMPORT_CHECK = "import mlx_whisper, fpdf, docx, sounddevice, Foundation, webview
 # The multilingual subset of MODELS in whisper_transcriber.py (labels and
 # repos must match it); the English-only models are offered in the app.
 MODELS = [
-    ("Large V3 Turbo — Fast & near-best accuracy (~1.6 GB)", "mlx-community/whisper-large-v3-turbo"),
-    ("Large V3 — Best accuracy (~3 GB)",                     "mlx-community/whisper-large-v3-mlx"),
-    ("Medium — Great balance (~1.5 GB)",                     "mlx-community/whisper-medium-mlx"),
-    ("Small — Fast (~480 MB)",                               "mlx-community/whisper-small-mlx"),
-    ("Base — Faster (~145 MB)",                              "mlx-community/whisper-base-mlx"),
-    ("Tiny — Fastest, lowest accuracy (~75 MB)",             "mlx-community/whisper-tiny-mlx"),
+    ("Large V3 Turbo — Best pick (~1.6 GB)",  "mlx-community/whisper-large-v3-turbo"),
+    ("Large V3 — Best accuracy (~3 GB)",      "mlx-community/whisper-large-v3-mlx"),
+    ("Medium — Great balance (~1.5 GB)",      "mlx-community/whisper-medium-mlx"),
+    ("Small — Fast (~480 MB)",                "mlx-community/whisper-small-mlx"),
+    ("Base — Faster (~145 MB)",               "mlx-community/whisper-base-mlx"),
+    ("Tiny — Fastest (~75 MB)",               "mlx-community/whisper-tiny-mlx"),
 ]
 DEFAULT_MODEL_INDEX = 0
 
