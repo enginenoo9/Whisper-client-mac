@@ -31,16 +31,16 @@ import webview
 # are a little more accurate on English speech than the same-size
 # multilingual model. Large V3 / Turbo have no English-only version.
 MODELS = [
-    ("Large V3 Turbo — Fast & near-best accuracy (~1.6 GB)",   "mlx-community/whisper-large-v3-turbo"),
-    ("Large V3 — Best accuracy (~3 GB)",                       "mlx-community/whisper-large-v3-mlx"),
-    ("Medium — Great balance (~1.5 GB)",                       "mlx-community/whisper-medium-mlx"),
-    ("Medium (English only) — Better on English (~1.5 GB)",    "mlx-community/whisper-medium.en-mlx"),
-    ("Small — Fast (~480 MB)",                                 "mlx-community/whisper-small-mlx"),
-    ("Small (English only) — Better on English (~480 MB)",     "mlx-community/whisper-small.en-mlx"),
-    ("Base — Faster (~145 MB)",                                "mlx-community/whisper-base-mlx"),
-    ("Base (English only) — Better on English (~145 MB)",      "mlx-community/whisper-base.en-mlx"),
-    ("Tiny — Fastest, lowest accuracy (~75 MB)",               "mlx-community/whisper-tiny-mlx"),
-    ("Tiny (English only) — Better on English (~75 MB)",       "mlx-community/whisper-tiny.en-mlx"),
+    ("Large V3 Turbo — Best pick (~1.6 GB)",  "mlx-community/whisper-large-v3-turbo"),
+    ("Large V3 — Best accuracy (~3 GB)",      "mlx-community/whisper-large-v3-mlx"),
+    ("Medium — Great balance (~1.5 GB)",      "mlx-community/whisper-medium-mlx"),
+    ("Medium (English only) — ~1.5 GB",       "mlx-community/whisper-medium.en-mlx"),
+    ("Small — Fast (~480 MB)",                "mlx-community/whisper-small-mlx"),
+    ("Small (English only) — ~480 MB",        "mlx-community/whisper-small.en-mlx"),
+    ("Base — Faster (~145 MB)",               "mlx-community/whisper-base-mlx"),
+    ("Base (English only) — ~145 MB",         "mlx-community/whisper-base.en-mlx"),
+    ("Tiny — Fastest (~75 MB)",               "mlx-community/whisper-tiny-mlx"),
+    ("Tiny (English only) — ~75 MB",          "mlx-community/whisper-tiny.en-mlx"),
 ]
 # Before 3.6 the config saved the model as an index into this older list.
 LEGACY_MODEL_REPOS = ["mlx-community/whisper-large-v3-mlx", "mlx-community/whisper-medium-mlx",

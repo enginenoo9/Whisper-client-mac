@@ -7,6 +7,12 @@ from your microphone. It runs OpenAI's Whisper models locally on Apple Silicon
 Drop in some files, pick a model, click **Transcribe**, and transcripts land in
 your chosen folder.
 
+<p align="center">
+  <img src="docs/screenshots/main-window.jpg" width="420" alt="Main window with three recordings queued and the Large V3 Turbo model selected">
+  &nbsp;
+  <img src="docs/screenshots/live-transcription.jpg" width="420" alt="Live Transcription panel recording from the microphone">
+</p>
+
 ## Why I built this
 
 I wanted an easy way to use OpenAI's Whisper on my Mac: no ads, no
