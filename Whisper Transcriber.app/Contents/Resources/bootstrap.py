@@ -31,14 +31,17 @@ REQUIRED_PACKAGES = ["mlx", "numba", "numpy", "scipy", "tiktoken", "tqdm",
                      "pyobjc-framework-Cocoa", "pywebview"]
 IMPORT_CHECK = "import mlx_whisper, fpdf, docx, sounddevice, Foundation, webview"
 
-# Keep in sync with MODELS / DEFAULT_MODEL_INDEX in whisper_transcriber.py.
+# The multilingual subset of MODELS in whisper_transcriber.py (labels and
+# repos must match it); the English-only models are offered in the app.
 MODELS = [
-    ("Large V3 — Best accuracy (~3 GB)",   "mlx-community/whisper-large-v3-mlx"),
-    ("Medium — Great balance (~1.5 GB)",   "mlx-community/whisper-medium-mlx"),
-    ("Small — Fast (~460 MB)",             "mlx-community/whisper-small-mlx"),
-    ("Base — Fastest (~145 MB)",           "mlx-community/whisper-base-mlx"),
+    ("Large V3 Turbo — Fast & near-best accuracy (~1.6 GB)", "mlx-community/whisper-large-v3-turbo"),
+    ("Large V3 — Best accuracy (~3 GB)",                     "mlx-community/whisper-large-v3-mlx"),
+    ("Medium — Great balance (~1.5 GB)",                     "mlx-community/whisper-medium-mlx"),
+    ("Small — Fast (~480 MB)",                               "mlx-community/whisper-small-mlx"),
+    ("Base — Faster (~145 MB)",                              "mlx-community/whisper-base-mlx"),
+    ("Tiny — Fastest, lowest accuracy (~75 MB)",             "mlx-community/whisper-tiny-mlx"),
 ]
-DEFAULT_MODEL_INDEX = 1
+DEFAULT_MODEL_INDEX = 0
 
 WHISPER_DIR = os.path.expanduser("~/Whisper")
 VENV_DIR = os.path.join(WHISPER_DIR, "venv")
@@ -124,14 +127,14 @@ def any_model_cached():
     return False
 
 
-def save_model_choice(index):
+def save_model_choice(repo):
     """Pre-select the downloaded model in the app's config."""
     try:
         with open(CONFIG_PATH) as f:
             cfg = json.load(f)
     except Exception:
         cfg = {}
-    cfg["model"] = index
+    cfg["model"] = repo
     try:
         with open(CONFIG_PATH, "w") as f:
             json.dump(cfg, f)
@@ -204,7 +207,7 @@ class SetupWindow:
         self.root = tk.Tk()
         self.root.title("Whisper Transcriber — Setup")
         self.root.configure(bg=BG)
-        self.root.geometry("520x540" if self.offer_model else "480x360")
+        self.root.geometry("520x590" if self.offer_model else "480x360")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._force_light_appearance()
@@ -353,7 +356,7 @@ class SetupWindow:
             # the model can be downloaded from the main window instead.
             self._log("⚠ Model download failed — you can download it from the app.")
             return
-        save_model_choice(index)
+        save_model_choice(repo)
         self._log("✓ Model ready.")
 
     def _begin_download(self):

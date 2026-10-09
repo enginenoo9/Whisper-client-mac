@@ -27,12 +27,28 @@ from datetime import datetime
 import webview
 
 # ── Models & formats ──────────────────────────────────────────────────────────
+# English-only (".en") models skip language detection and translation, and
+# are a little more accurate on English speech than the same-size
+# multilingual model. Large V3 / Turbo have no English-only version.
 MODELS = [
-    ("Large V3 — Best accuracy (~3 GB)",   "mlx-community/whisper-large-v3-mlx"),
-    ("Medium — Great balance (~1.5 GB)",   "mlx-community/whisper-medium-mlx"),
-    ("Small — Fast (~460 MB)",             "mlx-community/whisper-small-mlx"),
-    ("Base — Fastest (~145 MB)",           "mlx-community/whisper-base-mlx"),
+    ("Large V3 Turbo — Fast & near-best accuracy (~1.6 GB)",   "mlx-community/whisper-large-v3-turbo"),
+    ("Large V3 — Best accuracy (~3 GB)",                       "mlx-community/whisper-large-v3-mlx"),
+    ("Medium — Great balance (~1.5 GB)",                       "mlx-community/whisper-medium-mlx"),
+    ("Medium (English only) — Better on English (~1.5 GB)",    "mlx-community/whisper-medium.en-mlx"),
+    ("Small — Fast (~480 MB)",                                 "mlx-community/whisper-small-mlx"),
+    ("Small (English only) — Better on English (~480 MB)",     "mlx-community/whisper-small.en-mlx"),
+    ("Base — Faster (~145 MB)",                                "mlx-community/whisper-base-mlx"),
+    ("Base (English only) — Better on English (~145 MB)",      "mlx-community/whisper-base.en-mlx"),
+    ("Tiny — Fastest, lowest accuracy (~75 MB)",               "mlx-community/whisper-tiny-mlx"),
+    ("Tiny (English only) — Better on English (~75 MB)",       "mlx-community/whisper-tiny.en-mlx"),
 ]
+# Before 3.6 the config saved the model as an index into this older list.
+LEGACY_MODEL_REPOS = ["mlx-community/whisper-large-v3-mlx", "mlx-community/whisper-medium-mlx",
+                      "mlx-community/whisper-small-mlx", "mlx-community/whisper-base-mlx"]
+
+
+def is_english_only(repo):
+    return ".en-" in repo
 MEDIA_EXTENSIONS = ["mp3", "mp4", "m4a", "wav", "flac", "aac", "ogg", "mkv", "webm",
                     "mov", "aiff", "aif", "opus", "wma", "m4v", "avi", "caf"]
 OUTPUT_FORMATS      = ["txt", "srt", "vtt", "pdf", "docx"]
@@ -83,7 +99,7 @@ PDF_UNICODE_FONTS = [
 ]
 
 CONFIG_PATH =os.path.expanduser("~/Whisper/whisper_transcriber_config.json")
-DEFAULT_MODEL_INDEX = 1
+DEFAULT_MODEL_INDEX = 0  # Large V3 Turbo
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -306,6 +322,7 @@ HTML = r"""<!DOCTYPE html>
   .toggle-row { display: flex; align-items: center; gap: 10px; }
   .toggle-row .lbl, .val > .lbl { font-size: 13px; }
   .val > .lbl { white-space: nowrap; }
+  .val.locked > * { opacity: .45; pointer-events: none; }
 
   .actions { display: flex; justify-content: center; gap: 12px; margin: 4px 0 16px; }
   .actions .btn { padding: 11px 26px; font-size: 15px; }
@@ -421,7 +438,7 @@ HTML = r"""<!DOCTYPE html>
 
     <div class="row">
       <label class="key" for="language">Language</label>
-      <div class="val">
+      <div class="val" id="langVal">
         <select id="language" onchange="onLanguage()"></select>
         <label class="toggle"><input type="checkbox" id="translate" onchange="onTranslate()"
                aria-label="Translate to English"><span class="slider"></span></label>
@@ -516,7 +533,7 @@ HTML = r"""<!DOCTYPE html>
 
 <script>
   var STATE = { models: [], formats: [], liveFormats: [], format: "txt",
-                cleanup: true, modelIndex: 1, recording: false };
+                cleanup: true, modelIndex: 0, englishOnly: [], recording: false };
 
   function api() { return window.pywebview.api; }
 
@@ -529,10 +546,12 @@ HTML = r"""<!DOCTYPE html>
     api().ready().then(function (s) {
       STATE.models = s.models; STATE.formats = s.formats; STATE.liveFormats = s.liveFormats;
       STATE.format = s.format; STATE.cleanup = s.cleanup; STATE.modelIndex = s.modelIndex;
+      STATE.englishOnly = s.englishOnly;
       renderModels(); renderFormat(); renderLiveFormat(); renderLanguages(s.languages, s.language);
       document.getElementById('cleanup').checked = s.cleanup;
       document.getElementById('timestamps').checked = s.timestamps;
       document.getElementById('translate').checked = s.translate;
+      applyModelCaps();
       document.getElementById('vocab').value = s.vocab;
       document.getElementById('outdir').textContent = s.outdir;
       setStatus(s.mlxInstalled ? "Ready." : "mlx-whisper not installed — click Install Now.");
@@ -656,7 +675,17 @@ HTML = r"""<!DOCTYPE html>
 
   function onModel()   { STATE.modelIndex = parseInt(document.getElementById('model').value, 10);
                          document.getElementById('liveModel').textContent = 'Model: ' + STATE.models[STATE.modelIndex].split('—')[0].trim();
-                         api().set_model(STATE.modelIndex); }
+                         applyModelCaps(); api().set_model(STATE.modelIndex); }
+  // English-only models always transcribe English, so the language and
+  // translate controls don't apply to them (their saved values are kept).
+  function applyModelCaps() {
+    var en = STATE.englishOnly[STATE.modelIndex];
+    var box = document.getElementById('langVal');
+    box.classList.toggle('locked', en);
+    box.title = en ? 'English-only model: always transcribes English.' : '';
+    document.getElementById('language').disabled = en;
+    document.getElementById('translate').disabled = en;
+  }
   function onCleanup() { STATE.cleanup = document.getElementById('cleanup').checked; api().set_cleanup(STATE.cleanup); }
   function onTimestamps() { api().set_timestamps(document.getElementById('timestamps').checked); }
   function onLanguage()   { api().set_language(document.getElementById('language').value); }
@@ -775,9 +804,11 @@ class Api:
             "language") in LANGUAGE_CODES else ""  # "" = auto-detect
         self.translate = bool(self._cfg.get("translate", False))
         self.vocab = str(self._cfg.get("vocab", ""))
-        self.model_index = self._cfg.get("model", DEFAULT_MODEL_INDEX)
-        if not isinstance(self.model_index, int) or not (0 <= self.model_index < len(MODELS)):
-            self.model_index = DEFAULT_MODEL_INDEX
+        saved = self._cfg.get("model")
+        if isinstance(saved, int) and 0 <= saved < len(LEGACY_MODEL_REPOS):
+            saved = LEGACY_MODEL_REPOS[saved]
+        repos = [repo for _label, repo in MODELS]
+        self.model_index = repos.index(saved) if saved in repos else DEFAULT_MODEL_INDEX
         self.mlx_installed = False
         self.is_running = False
         self._cancel = threading.Event()
@@ -820,6 +851,7 @@ class Api:
         self._check_install()
         return {
             "models":      [m[0] for m in MODELS],
+            "englishOnly": [is_english_only(m[1]) for m in MODELS],
             "formats":     OUTPUT_FORMATS,
             "liveFormats": LIVE_OUTPUT_FORMATS,
             "format":      self.out_format,
@@ -845,7 +877,7 @@ class Api:
             return {}
 
     def _save_config(self):
-        data = {"model": self.model_index, "format": self.out_format,
+        data = {"model": self._current_model()[1], "format": self.out_format,
                 "outdir": self.outdir, "cleanup": self.cleanup,
                 "timestamps": self.timestamps, "language": self.language,
                 "translate": self.translate, "vocab": self.vocab}
@@ -900,9 +932,14 @@ class Api:
         keyword arguments. The vocabulary goes in as Whisper's "initial
         prompt": text the model treats as what came just before the audio,
         so names and terms in it get spelled that way."""
-        opts = {"task": "translate" if self.translate else "transcribe"}
-        if self.language:
-            opts["language"] = self.language
+        if is_english_only(self._current_model()[1]):
+            # The saved language/translate choices are kept for when a
+            # multilingual model is picked again, but don't apply here.
+            opts = {"task": "transcribe", "language": "en"}
+        else:
+            opts = {"task": "translate" if self.translate else "transcribe"}
+            if self.language:
+                opts["language"] = self.language
         if self.vocab:
             opts["initial_prompt"] = self.vocab
         return opts

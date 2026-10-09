@@ -32,7 +32,7 @@ No Homebrew, no Python install, nothing to run in Terminal.
    Whisper Transcriber. Confirm with **Open Anyway** and your password or
    Touch ID. You only need to do this once per Mac.
 3. First launch shows a **Setting up…** window. Pick a transcription model
-   (Medium is a good default) — setup installs mlx-whisper into a private
+   (Large V3 Turbo is a good default) — setup installs mlx-whisper into a private
    folder and downloads that model, a few minutes in total depending on your
    connection. Every launch after that is instant.
 
@@ -121,10 +121,17 @@ that step.
 
 1. Open the app.
 2. **Model** — pick quality vs. speed:
+   - *Large V3 Turbo* — fast with near-best accuracy, default (~1.6 GB). It
+     wasn't trained to translate, so for **Translate to English** pick
+     *Large V3* or *Medium* instead.
    - *Large V3* — best accuracy (~3 GB)
-   - *Medium* — great balance, default (~1.5 GB)
-   - *Small* — fast (~460 MB)
-   - *Base* — fastest (~145 MB)
+   - *Medium* — great balance (~1.5 GB)
+   - *Small* — fast (~480 MB)
+   - *Base* — faster (~145 MB)
+   - *Tiny* — fastest, lowest accuracy (~75 MB)
+   - *English only* versions of Medium, Small, Base and Tiny are a little
+     more accurate on English speech. They always transcribe English, so the
+     Language and Translate options are greyed out while one is selected.
 3. **Files** — drag audio/video files (or whole folders) onto the window, or
    click **Add Files…**, to queue one or more files. Files that share a name
    get numbered transcripts (`audio.txt`, `audio (2).txt`) so none overwrite
@@ -257,8 +264,8 @@ Python. Install Homebrew and run `brew install python-tk`, then reopen the app.
 (The DMG doesn't need this.)
 
 **Transcription is slow**
-Use *Medium* or *Small*. On M1, Medium transcribes ~1 hour of audio in a few
-minutes.
+Use *Large V3 Turbo* rather than *Large V3*, or a smaller model like *Small*
+or *Base*. On M1, Medium transcribes ~1 hour of audio in a few minutes.
 
 ---
 
